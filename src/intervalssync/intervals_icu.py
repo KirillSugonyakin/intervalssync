@@ -30,6 +30,18 @@ class CalendarWorkout:
 
 
 @dataclass(frozen=True)
+class ActivityUploadResult:
+    activity_id: str
+    created: bool
+
+
+@dataclass
+class ActivityIdentities:
+    activity_ids: set[str]
+    external_ids: dict[str, str]
+
+
+@dataclass(frozen=True)
 class SportSettings:
     ftp: float | None
     lthr: float | None
@@ -60,8 +72,8 @@ def _num_list(value: Any) -> list[float]:
 
 def upload_fit_file(
     fit_path: Path, title: str, external_id: str, api_key: str
-) -> str | None:
-    """Upload a .fit file; return the new activity id or None on failure."""
+) -> ActivityUploadResult | None:
+    """Upload a .fit file and classify whether Intervals created or linked it."""
     with fit_path.open("rb") as f:
         resp = requests.post(
             INTERVALS_UPLOAD_URL,
@@ -72,11 +84,24 @@ def upload_fit_file(
     if resp.status_code not in (200, 201):
         return None
 
-    data = resp.json()
+    try:
+        data = resp.json()
+    except ValueError:
+        return None
+    if not isinstance(data, dict):
+        return None
     activities = data.get("activities") or []
-    if activities and activities[0].get("id"):
-        return activities[0]["id"]
-    return data.get("id")
+    activity_id = None
+    if activities and isinstance(activities[0], dict):
+        activity_id = activities[0].get("id")
+    if not activity_id:
+        activity_id = data.get("id")
+    if not activity_id:
+        return None
+    return ActivityUploadResult(
+        activity_id=str(activity_id),
+        created=resp.status_code == 201,
+    )
 
 
 def set_activity_type(activity_id: str, activity_type: str, api_key: str) -> bool:
@@ -89,21 +114,51 @@ def set_activity_type(activity_id: str, activity_type: str, api_key: str) -> boo
     return resp.ok
 
 
-def fetch_uploaded_external_ids(
+def fetch_activity_identities(
     api_key: str, oldest: date, newest: date
-) -> set[str]:
-    """Return external_ids already on intervals.icu in a date range."""
+) -> ActivityIdentities:
+    """Return Intervals activity IDs and external-ID links in a date range."""
     resp = requests.get(
         INTERVALS_ACTIVITIES_URL,
         params={"oldest": oldest.isoformat(), "newest": newest.isoformat()},
         auth=("API_KEY", api_key),
     )
     resp.raise_for_status()
-    return {
-        a["external_id"]
-        for a in resp.json()
-        if isinstance(a, dict) and a.get("external_id")
-    }
+    activity_ids: set[str] = set()
+    external_ids: dict[str, str] = {}
+    for activity in resp.json():
+        if not isinstance(activity, dict) or activity.get("id") is None:
+            continue
+        activity_id = str(activity["id"])
+        activity_ids.add(activity_id)
+        external_id = activity.get("external_id")
+        if external_id:
+            external_ids[str(external_id)] = activity_id
+    return ActivityIdentities(activity_ids, external_ids)
+
+
+def fetch_uploaded_external_ids(
+    api_key: str, oldest: date, newest: date
+) -> set[str]:
+    """Return external_ids already on intervals.icu in a date range."""
+    return set(fetch_activity_identities(api_key, oldest, newest).external_ids)
+
+
+def activity_exists(api_key: str, activity_id: str) -> bool:
+    """Return whether an activity exists, raising if absence cannot be verified."""
+    resp = requests.get(
+        f"{INTERVALS_ACTIVITY_URL}/{activity_id}",
+        auth=("API_KEY", api_key),
+    )
+    if resp.status_code == 404:
+        return False
+    if resp.status_code == 200:
+        return True
+    resp.raise_for_status()
+    raise requests.HTTPError(
+        f"Unexpected HTTP {resp.status_code} verifying activity {activity_id}",
+        response=resp,
+    )
 
 
 def fetch_calendar_workouts(

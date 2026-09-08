@@ -90,50 +90,102 @@ def test_activity_date_range_fallback_when_unparseable():
     assert (newest - oldest).days >= 365
 
 
-def test_upload_returns_activity_id_from_activities(monkeypatch, tmp_path):
+def test_upload_201_returns_created_activity_from_activities(monkeypatch, tmp_path):
     fit = tmp_path / "igpsport_1.fit"
     fit.write_bytes(b"FIT")
     monkeypatch.setattr(
         intervals_icu.requests,
         "post",
-        lambda *a, **k: FakeResponse(json_data={"id": "iX", "activities": [{"id": "i999"}]}),
+        lambda *a, **k: FakeResponse(
+            status=201,
+            json_data={"id": "iX", "activities": [{"id": "i999"}]},
+        ),
     )
-    assert core.upload_to_intervals(fit, "Ride", 1, "key") == "i999"
+    result = core.upload_to_intervals(fit, "Ride", 1, "key")
+    assert result.activity_id == "i999"
+    assert result.created is True
 
 
-def test_upload_falls_back_to_top_level_id(monkeypatch, tmp_path):
+def test_upload_200_returns_linked_activity_from_top_level_id(monkeypatch, tmp_path):
     fit = tmp_path / "igpsport_1.fit"
     fit.write_bytes(b"FIT")
     monkeypatch.setattr(
         intervals_icu.requests,
         "post",
-        lambda *a, **k: FakeResponse(json_data={"id": "iTOP", "activities": []}),
+        lambda *a, **k: FakeResponse(
+            status=200,
+            json_data={"id": "iTOP", "activities": []},
+        ),
     )
-    assert core.upload_to_intervals(fit, "Ride", 1, "key") == "iTOP"
+    result = core.upload_to_intervals(fit, "Ride", 1, "key")
+    assert result.activity_id == "iTOP"
+    assert result.created is False
 
 
-def test_upload_returns_none_on_failure(monkeypatch, tmp_path):
+@pytest.mark.parametrize(
+    "status,json_data",
+    [
+        (500, None),
+        (200, {"activities": []}),
+        (200, {"activities": [{"id": ""}]}),
+        (201, {}),
+    ],
+)
+def test_upload_returns_none_on_failure_or_missing_id(
+    monkeypatch, tmp_path, status, json_data
+):
     fit = tmp_path / "igpsport_1.fit"
     fit.write_bytes(b"FIT")
-    monkeypatch.setattr(intervals_icu.requests, "post", lambda *a, **k: FakeResponse(status=500))
+    monkeypatch.setattr(
+        intervals_icu.requests,
+        "post",
+        lambda *a, **k: FakeResponse(status=status, json_data=json_data),
+    )
     assert core.upload_to_intervals(fit, "Ride", 1, "key") is None
 
 
-def test_fetch_uploaded_external_ids_filters_empty(monkeypatch):
+def test_fetch_activity_identities_returns_ids_and_external_id_map(monkeypatch):
     monkeypatch.setattr(
         intervals_icu.requests,
         "get",
         lambda *a, **k: FakeResponse(
             json_data=[
-                {"external_id": "igpsport_1"},
-                {"external_id": None},
+                {"id": "i1", "external_id": "igpsport_1"},
+                {"id": "i2", "external_id": None},
                 {},
-                {"external_id": "igpsport_2"},
+                {"id": "i3", "external_id": "igpsport_3"},
             ]
         ),
     )
-    ids = core.fetch_uploaded_external_ids("key", date(2026, 1, 1), date(2026, 1, 2))
-    assert ids == {"igpsport_1", "igpsport_2"}
+    identities = core.fetch_activity_identities(
+        "key", date(2026, 1, 1), date(2026, 1, 2)
+    )
+    assert identities.activity_ids == {"i1", "i2", "i3"}
+    assert identities.external_ids == {
+        "igpsport_1": "i1",
+        "igpsport_3": "i3",
+    }
+
+
+@pytest.mark.parametrize("status,expected", [(200, True), (404, False)])
+def test_activity_exists_distinguishes_present_and_deleted(monkeypatch, status, expected):
+    monkeypatch.setattr(
+        intervals_icu.requests,
+        "get",
+        lambda *a, **k: FakeResponse(status=status),
+    )
+    assert core.activity_exists("key", "i1") is expected
+
+
+@pytest.mark.parametrize("status", [201, 204, 301, 401, 403, 429, 500, 503])
+def test_activity_exists_raises_for_unverified_status(monkeypatch, status):
+    monkeypatch.setattr(
+        intervals_icu.requests,
+        "get",
+        lambda *a, **k: FakeResponse(status=status),
+    )
+    with pytest.raises(core.requests.HTTPError):
+        core.activity_exists("key", "i1")
 
 
 @pytest.mark.parametrize("status,expected", [(200, True), (400, False)])
@@ -335,6 +387,10 @@ def stub_sync(monkeypatch, tmp_path):
         "dropbox": [],
         "typed": [],
         "existing": set(),
+        "activity_ids": set(),
+        "fetch_error": None,
+        "verified": {},
+        "upload_results": {},
         "dropbox_existing": set(),
         "dropbox_ok": True,
     }
@@ -358,13 +414,34 @@ def stub_sync(monkeypatch, tmp_path):
         return dest
 
     monkeypatch.setattr(core, "download_fit", fake_download)
-    monkeypatch.setattr(
-        core, "fetch_uploaded_external_ids", lambda k, o, n: rec["existing"]
-    )
+    def fake_fetch_identities(key, oldest, newest):
+        if rec["fetch_error"]:
+            raise rec["fetch_error"]
+        external_ids = {
+            ext: f"existing-{ext}"
+            for ext in rec["existing"]
+        }
+        return intervals_icu.ActivityIdentities(
+            set(rec["activity_ids"]) | set(external_ids.values()),
+            external_ids,
+        )
+
+    monkeypatch.setattr(core, "fetch_activity_identities", fake_fetch_identities)
+
+    def fake_activity_exists(key, activity_id):
+        outcome = rec["verified"].get(activity_id, True)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(core, "activity_exists", fake_activity_exists)
 
     def fake_upload(fp, title, ride_id, key):
         rec["uploaded"].append(ride_id)
-        return f"i{ride_id}"
+        return rec["upload_results"].get(
+            ride_id,
+            intervals_icu.ActivityUploadResult(f"i{ride_id}", created=True),
+        )
 
     monkeypatch.setattr(core, "upload_to_intervals", fake_upload)
 
@@ -399,6 +476,7 @@ def _config(tmp_path, **overrides):
         download_dir=tmp_path,
         delete_after_upload=False,
         force_resync=False,
+        uploaded_activities={},
         activity_type="",
         list_activities=False,
         get_download_url=False,
@@ -420,11 +498,180 @@ def test_sync_skips_already_uploaded(stub_sync):
     assert stub_sync["downloaded"] == ["igpsport_3.fit"]
 
 
+def test_apply_uploaded_activity_map_updates_and_prunes():
+    uploaded = {"1": "old-i1", "2": "i2"}
+    result = core.SyncResult(
+        activity_map={"1": "new-i1", "3": "i3"},
+        pruned_keys=["1", "2"],
+    )
+
+    core.apply_uploaded_activity_map(uploaded, result)
+
+    assert uploaded == {"1": "new-i1", "3": "i3"}
+
+
+def test_sync_expected_external_id_seeds_mapping_without_download(stub_sync):
+    stub_sync["existing"] = {"igpsport_1"}
+
+    result = core.sync(_config(stub_sync["tmp"]))
+
+    assert result.activity_map == {
+        "1": "existing-igpsport_1",
+        "2": "i2",
+        "3": "i3",
+    }
+    assert result.skipped == 1
+    assert "igpsport_1.fit" not in stub_sync["downloaded"]
+
+
+def test_sync_mapped_id_in_window_skips_without_verification_or_download(stub_sync):
+    stub_sync["activity_ids"] = {"mapped-i1"}
+    stub_sync["verified"]["mapped-i1"] = AssertionError("must not verify")
+
+    result = core.sync(
+        _config(stub_sync["tmp"], uploaded_activities={"1": "mapped-i1"})
+    )
+
+    assert result.skipped == 1
+    assert "igpsport_1.fit" not in stub_sync["downloaded"]
+
+
+def test_sync_mapped_id_get_200_skips_without_download(stub_sync):
+    stub_sync["verified"]["mapped-i1"] = True
+
+    result = core.sync(
+        _config(stub_sync["tmp"], uploaded_activities={"1": "mapped-i1"})
+    )
+
+    assert result.skipped == 1
+    assert result.pruned_keys == []
+    assert "igpsport_1.fit" not in stub_sync["downloaded"]
+
+
+def test_sync_mapped_id_get_404_prunes_then_uploads(stub_sync):
+    stub_sync["verified"]["gone-i1"] = False
+
+    result = core.sync(
+        _config(stub_sync["tmp"], uploaded_activities={"1": "gone-i1"})
+    )
+
+    assert result.pruned_keys == ["1"]
+    assert result.uploaded == 3
+    assert result.activity_map["1"] == "i1"
+    assert "igpsport_1.fit" in stub_sync["downloaded"]
+
+
+def test_sync_initial_identity_lookup_error_fails_before_download(stub_sync):
+    stub_sync["fetch_error"] = core.requests.ConnectionError("lookup failed")
+
+    with pytest.raises(core.SyncError, match="Could not check intervals.icu"):
+        core.sync(_config(stub_sync["tmp"]))
+
+    assert stub_sync["downloaded"] == []
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        core.requests.ConnectionError("connection failed"),
+        core.requests.HTTPError("HTTP 401"),
+        core.requests.HTTPError("HTTP 403"),
+        core.requests.HTTPError("HTTP 429"),
+        core.requests.HTTPError("HTTP 500"),
+        core.requests.HTTPError("HTTP 503"),
+    ],
+)
+def test_sync_mapping_verification_error_preflights_before_any_download(
+    stub_sync, error
+):
+    stub_sync["verified"]["mapped-i2"] = error
+
+    with pytest.raises(core.SyncError, match="Could not verify intervals.icu activity"):
+        core.sync(
+            _config(stub_sync["tmp"], uploaded_activities={"2": "mapped-i2"})
+        )
+
+    assert stub_sync["downloaded"] == []
+
+
+def test_sync_201_records_mapping_and_sets_activity_type(stub_sync):
+    result = core.sync(
+        _config(stub_sync["tmp"], activity_type="MountainBikeRide")
+    )
+
+    assert result.uploaded == 3
+    assert result.linked == 0
+    assert result.activity_map == {"1": "i1", "2": "i2", "3": "i3"}
+    assert stub_sync["typed"] == [
+        ("i1", "MountainBikeRide"),
+        ("i2", "MountainBikeRide"),
+        ("i3", "MountainBikeRide"),
+    ]
+
+
+def test_sync_200_links_foreign_duplicate_without_setting_type(stub_sync):
+    stub_sync["upload_results"][1] = intervals_icu.ActivityUploadResult(
+        "foreign-i1", created=False
+    )
+
+    result = core.sync(
+        _config(stub_sync["tmp"], activity_type="MountainBikeRide")
+    )
+
+    assert result.uploaded == 2
+    assert result.linked == 1
+    assert result.activity_map["1"] == "foreign-i1"
+    assert ("foreign-i1", "MountainBikeRide") not in stub_sync["typed"]
+
+
+def test_sync_failed_upload_keeps_fit(stub_sync):
+    stub_sync["upload_results"][1] = None
+
+    result = core.sync(_config(stub_sync["tmp"], delete_after_upload=True))
+
+    assert result.failed == 1
+    assert (stub_sync["tmp"] / "igpsport_1.fit").exists()
+
+
+def test_sync_repeat_cycle_uses_persisted_mapping_without_redownload(stub_sync):
+    first = core.sync(_config(stub_sync["tmp"]))
+    persisted = {}
+    core.apply_uploaded_activity_map(persisted, first)
+    stub_sync["downloaded"].clear()
+
+    second = core.sync(
+        _config(stub_sync["tmp"], uploaded_activities=dict(persisted))
+    )
+
+    assert second.skipped == 3
+    assert stub_sync["downloaded"] == []
+
+
 def test_sync_force_resync_processes_all(stub_sync):
     stub_sync["existing"] = {"igpsport_1", "igpsport_2", "igpsport_3"}
     result = core.sync(_config(stub_sync["tmp"], force_resync=True))
     assert result.skipped == 0
     assert result.uploaded == 3
+
+
+def test_sync_force_resync_bypasses_identity_checks_and_classifies_results(stub_sync):
+    stub_sync["fetch_error"] = AssertionError("must not discover")
+    stub_sync["verified"]["mapped-i1"] = AssertionError("must not verify")
+    stub_sync["upload_results"][1] = intervals_icu.ActivityUploadResult(
+        "linked-i1", created=False
+    )
+
+    result = core.sync(
+        _config(
+            stub_sync["tmp"],
+            force_resync=True,
+            uploaded_activities={"1": "mapped-i1"},
+        )
+    )
+
+    assert result.uploaded == 2
+    assert result.linked == 1
+    assert result.activity_map["1"] == "linked-i1"
 
 
 def test_sync_download_only_does_not_skip(stub_sync):
