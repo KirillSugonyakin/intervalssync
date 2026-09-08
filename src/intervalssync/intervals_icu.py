@@ -92,7 +92,11 @@ def upload_fit_file(
         return None
     activities = data.get("activities") or []
     activity_id = None
-    if activities and isinstance(activities[0], dict):
+    if (
+        isinstance(activities, list)
+        and activities
+        and isinstance(activities[0], dict)
+    ):
         activity_id = activities[0].get("id")
     if not activity_id:
         activity_id = data.get("id")
@@ -124,9 +128,12 @@ def fetch_activity_identities(
         auth=("API_KEY", api_key),
     )
     resp.raise_for_status()
+    data = resp.json()
+    if not isinstance(data, list):
+        raise ValueError("intervals.icu activities response must be a list")
     activity_ids: set[str] = set()
     external_ids: dict[str, str] = {}
-    for activity in resp.json():
+    for activity in data:
         if not isinstance(activity, dict) or activity.get("id") is None:
             continue
         activity_id = str(activity["id"])

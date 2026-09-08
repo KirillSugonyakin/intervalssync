@@ -419,7 +419,7 @@ def sync(config: SyncConfig, progress: Progress | None = None) -> SyncResult:
             identities = fetch_activity_identities(
                 config.intervals_api_key, oldest, newest
             )
-        except requests.RequestException as exc:
+        except (requests.RequestException, ValueError) as exc:
             raise SyncError(f"Could not check intervals.icu activities: {exc}") from exc
 
         report(
