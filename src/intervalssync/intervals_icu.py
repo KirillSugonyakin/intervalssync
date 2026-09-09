@@ -70,6 +70,14 @@ def _num_list(value: Any) -> list[float]:
     return out
 
 
+def _parse_activity_id(value: Any) -> str | None:
+    """Return a normalized Intervals identifier or None for unsupported values."""
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
 def upload_fit_file(
     fit_path: Path, title: str, external_id: str, api_key: str
 ) -> ActivityUploadResult | None:
@@ -97,13 +105,13 @@ def upload_fit_file(
         and activities
         and isinstance(activities[0], dict)
     ):
-        activity_id = activities[0].get("id")
-    if not activity_id:
-        activity_id = data.get("id")
-    if not activity_id:
+        activity_id = _parse_activity_id(activities[0].get("id"))
+    if activity_id is None:
+        activity_id = _parse_activity_id(data.get("id"))
+    if activity_id is None:
         return None
     return ActivityUploadResult(
-        activity_id=str(activity_id),
+        activity_id=activity_id,
         created=resp.status_code == 201,
     )
 
@@ -126,6 +134,7 @@ def fetch_activity_identities(
         INTERVALS_ACTIVITIES_URL,
         params={"oldest": oldest.isoformat(), "newest": newest.isoformat()},
         auth=("API_KEY", api_key),
+        timeout=30,
     )
     resp.raise_for_status()
     data = resp.json()
@@ -134,13 +143,18 @@ def fetch_activity_identities(
     activity_ids: set[str] = set()
     external_ids: dict[str, str] = {}
     for activity in data:
-        if not isinstance(activity, dict) or activity.get("id") is None:
+        if not isinstance(activity, dict) or "id" not in activity:
             continue
-        activity_id = str(activity["id"])
+        activity_id = _parse_activity_id(activity["id"])
+        if activity_id is None:
+            raise ValueError("intervals.icu activity id must be a nonempty string")
         activity_ids.add(activity_id)
         external_id = activity.get("external_id")
-        if external_id:
-            external_ids[str(external_id)] = activity_id
+        if external_id is not None:
+            external_id = _parse_activity_id(external_id)
+            if external_id is None:
+                raise ValueError("intervals.icu external_id must be a nonempty string")
+            external_ids[external_id] = activity_id
     return ActivityIdentities(activity_ids, external_ids)
 
 
@@ -156,6 +170,7 @@ def activity_exists(api_key: str, activity_id: str) -> bool:
     resp = requests.get(
         f"{INTERVALS_ACTIVITY_URL}/{activity_id}",
         auth=("API_KEY", api_key),
+        timeout=30,
     )
     if resp.status_code == 404:
         return False
