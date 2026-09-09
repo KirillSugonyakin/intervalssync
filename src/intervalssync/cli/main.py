@@ -37,7 +37,7 @@ from ..bryton.workout import (
 from ..igpsport.workout import (
     WorkoutUploadConfig,
     WorkoutUploadResult,
-    apply_uploaded_workout_map,
+    apply_workout_state,
     upload_workouts,
 )
 from . import config as cli_config_module
@@ -193,6 +193,11 @@ def _build_workout_upload_config(
             workout_days_ahead if workout_days_ahead is not None else config.workout_days_ahead
         ),
         uploaded_workouts=dict(config.uploaded_workouts),
+        workout_records={
+            str(key): dict(value)
+            for key, value in config.workout_records.items()
+            if isinstance(value, dict)
+        },
         force_resync=force_resync if force_resync is not None else config.force_resync,
     )
 
@@ -228,10 +233,17 @@ def _workout_result_payload(
         "source": source,
         "listed": result.listed,
         "uploaded": result.uploaded,
+        "updated": getattr(result, "updated", 0),
+        "recreated": getattr(result, "recreated", 0),
         "skipped": result.skipped,
         "failed": result.failed,
+        "conflicted": getattr(result, "conflicted", 0),
         "no_steps": result.no_steps,
+        "description_truncated": getattr(result, "description_truncated", 0),
     }
+    if isinstance(result, WorkoutUploadResult):
+        payload["uploaded_map"] = result.uploaded_map
+        payload["synced_map"] = result.synced_map
     if error is not None:
         payload["error"] = error
     return payload
@@ -240,7 +252,10 @@ def _workout_result_payload(
 def _emit_workout_text_summary(result: WorkoutUploadResult | BrytonWorkoutUploadResult) -> None:
     print(
         f"Done — uploaded {result.uploaded}, "
+        f"updated {getattr(result, 'updated', 0)}, "
+        f"recreated {getattr(result, 'recreated', 0)}, "
         f"skipped {result.skipped}, "
+        f"conflicted {getattr(result, 'conflicted', 0)}, "
         f"no steps {result.no_steps}, "
         f"failed {result.failed}."
     )
@@ -457,11 +472,17 @@ def cmd_upload_workouts(args: argparse.Namespace) -> int:
             print(f"✗ Unexpected error: {exc}", file=sys.stderr)
         return EXIT_SYNC_ERROR
 
-    if result.uploaded_map or result.pruned_keys:
-        apply_uploaded_workout_map(config.uploaded_workouts, result)
+    if (
+        result.workout_records != config.workout_records
+        or result.uploaded_map
+        or result.pruned_keys
+    ):
+        apply_workout_state(
+            config.uploaded_workouts, config.workout_records, result
+        )
         cli_config_module.save(config)
 
-    ok = result.failed == 0
+    ok = result.failed == 0 and result.conflicted == 0
     if use_json:
         _emit_json(_workout_result_payload(result, ok=ok, source=source))
     else:
