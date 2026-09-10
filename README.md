@@ -73,7 +73,7 @@
 
 ## Download & run (Windows)
 
-1. Go to the [Releases](../../releases) page and download the latest `.zip`.
+1. Go to the [Releases](https://github.com/jorge-huxley/intervalssync/releases) page and download the latest `.zip`.
 2. Unzip it anywhere and double-click the app (e.g. `intervalssync.exe`).
 3. On first launch, open **Settings** and enter:
    - your iGPSPORT **email** and **password** (or **phone number** for China — set region to China if you use [app.igpsport.cn](https://app.igpsport.cn/login))
@@ -86,7 +86,7 @@ Windows uses for its own logins) — never in a plain text file.
 
 ## Download & run (macOS)
 
-1. Go to the [Releases](../../releases) page and download the latest `macos.zip`.
+1. Go to the [Releases](https://github.com/jorge-huxley/intervalssync/releases) page and download the latest `macos.zip`.
 2. Unzip it and move the app to **Applications** if you want.
 3. Open the app, fill in **Settings** (same fields as above), then **Sync** or **Upload to iGPSPORT** / **Upload to Bryton**.
 
@@ -96,7 +96,7 @@ notarized yet, so macOS may require right-clicking the app and choosing
 
 ## Download & run (Android)
 
-1. On the [Releases](../../releases) page, download the latest `.apk`.
+1. On the [Releases](https://github.com/jorge-huxley/intervalssync/releases) page, download the latest `.apk`.
 2. Open it on your phone. Android will ask you to allow installing from this
    source — accept (Settings → "Install unknown apps" for your browser/files app).
 3. Open the app, fill in **Settings** (same fields as above), then **Sync** or **Upload to iGPSPORT** / **Upload to Bryton**.
@@ -114,6 +114,17 @@ directly from PyPI—no clone or manual upgrade required:
 ```bash
 uvx --python 3.13 intervalssync@latest --version
 uvx --python 3.13 intervalssync@latest sync --json
+```
+
+The verified `sync-rider-settings` command is currently available in the
+reviewed fork commit used by `relay-to-intervals`; it is not part of the latest
+upstream PyPI release (`v0.9.3`). Until an upstream release includes it, invoke
+that immutable revision explicitly:
+
+```bash
+uvx --python 3.13 \
+  --from "git+https://github.com/KirillSugonyakin/intervalssync.git@81f49ad5356aa41609214bae34bc682497c14ead" \
+  intervalssync sync-rider-settings --env-file .env --sport Ride --dry-run --json
 ```
 
 ## Run from source
