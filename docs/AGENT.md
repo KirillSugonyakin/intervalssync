@@ -146,20 +146,28 @@ Success example:
 ### Verified rider settings (intervals.icu → iGPSPORT)
 
 Use this command when intervals.icu must own the cycling profile values and
-iGPSPORT is only the destination:
+iGPSPORT is only the destination. This command is not in the current upstream
+PyPI release (`v0.9.3`). The examples intentionally execute the immutable fork
+revision reviewed and deployed by `relay-to-intervals`:
 
 ```bash
 # All supported fields, status-only output, no writes
-uvx --python 3.13 intervalssync@latest sync-rider-settings \
+uvx --python 3.13 \
+  --from "git+https://github.com/KirillSugonyakin/intervalssync.git@81f49ad5356aa41609214bae34bc682497c14ead" \
+  intervalssync sync-rider-settings \
   --env-file .env --sport Ride --dry-run --json
 
 # Selected zone groups; show values only for this explicit dry-run
-uvx --python 3.13 intervalssync@latest sync-rider-settings \
+uvx --python 3.13 \
+  --from "git+https://github.com/KirillSugonyakin/intervalssync.git@81f49ad5356aa41609214bae34bc682497c14ead" \
+  intervalssync sync-rider-settings \
   --env-file .env --sport Ride \
   --fields hr_zones,power_zones --dry-run --show-values --json
 
 # Apply all supported fields and verify iGPSPORT read-back
-uvx --python 3.13 intervalssync@latest sync-rider-settings \
+uvx --python 3.13 \
+  --from "git+https://github.com/KirillSugonyakin/intervalssync.git@81f49ad5356aa41609214bae34bc682497c14ead" \
+  intervalssync sync-rider-settings \
   --env-file .env --sport Ride --json
 ```
 
@@ -175,6 +183,14 @@ and Coggan seven-zone power. Friel HR maps zones 1–4 directly and combines the
 upper zones into iGPSPORT zone 5 in LTHR mode. Coggan power retains seven slots,
 uses FTP percentages with half-up rounding, and preserves the destination's
 terminal cap. Unknown or malformed schemes fail closed instead of interpolating.
+
+Synthetic conversion example: with Friel HR upper bounds
+`[120,145,165,175,185,190,195]` and maximum HR `195`, iGPSPORT receives five
+ends `[120,145,165,175,195]`; the three upper Friel bands become one fifth band.
+With FTP `250`, Coggan percentages `[55,75,90,105,120,150,999]`, and a fetched
+destination cap of `2500`, iGPSPORT receives
+`[138,188,225,263,300,375,2500]`. Positive half-watts round upward, the `999`
+open marker is never multiplied by FTP, and the existing terminal cap is kept.
 
 Missing Intervals values never clear iGPSPORT fields. Writes are grouped by the
 iGPSPORT interval and personal-profile endpoints, with at most one write per
