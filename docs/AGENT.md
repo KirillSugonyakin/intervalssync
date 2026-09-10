@@ -143,6 +143,56 @@ Success example:
 }
 ```
 
+### Verified rider settings (intervals.icu → iGPSPORT)
+
+Use this command when intervals.icu must own the cycling profile values and
+iGPSPORT is only the destination:
+
+```bash
+# All supported fields, status-only output, no writes
+uvx --python 3.13 intervalssync@latest sync-rider-settings \
+  --env-file .env --sport Ride --dry-run --json
+
+# Selected zone groups; show values only for this explicit dry-run
+uvx --python 3.13 intervalssync@latest sync-rider-settings \
+  --env-file .env --sport Ride \
+  --fields hr_zones,power_zones --dry-run --show-values --json
+
+# Apply all supported fields and verify iGPSPORT read-back
+uvx --python 3.13 intervalssync@latest sync-rider-settings \
+  --env-file .env --sport Ride --json
+```
+
+Supported fields are `ftp`, `power_zones`, `max_hr`, `lthr`, `hr_zones`,
+`resting_hr`, `weight`, `height`, `birth_date`, and `sex`. Omit `--fields`, or
+pass a blank value, to select all fields. `power_zones` automatically includes
+`ftp`; `hr_zones` automatically includes `lthr` and `max_hr`. Duplicate, empty,
+or unknown field names are configuration errors. Only cycling `Ride` is
+supported; other sports are intentionally reserved for later generic support.
+
+The strict adapter recognizes a direct five-zone HR scheme, Friel seven-zone HR,
+and Coggan seven-zone power. Friel HR maps zones 1–4 directly and combines the
+upper zones into iGPSPORT zone 5 in LTHR mode. Coggan power retains seven slots,
+uses FTP percentages with half-up rounding, and preserves the destination's
+terminal cap. Unknown or malformed schemes fail closed instead of interpolating.
+
+Missing Intervals values never clear iGPSPORT fields. Writes are grouped by the
+iGPSPORT interval and personal-profile endpoints, with at most one write per
+changed group. Each successful write is fetched again and compared exactly; a
+2xx response with a mismatch is `verify_failed`. A second unchanged run performs
+no write.
+
+Normal JSON is status-only. It contains requested/effective fields, per-field
+statuses, recognized zone models, `zone_adapter_version`, and the numeric
+`selected`, `updated`, `verified`, `unchanged`, `source_missing`, and `failed`
+counters. Source/current/desired values appear only when both `--dry-run` and
+`--show-values` are supplied. `--show-values` without `--dry-run` is rejected.
+
+Possible field statuses are `unchanged`, `would_update`, `verified`,
+`source_missing`, `invalid`, `write_failed`, and `verify_failed`. Exit code `0`
+means no field failed; `1` means an upstream/write/verification failure; `2`
+means invalid CLI configuration or credentials.
+
 ## Optional flags
 
 | Flag | Purpose |
@@ -150,7 +200,10 @@ Success example:
 | `--source {igpsport,bryton}` | Activity source or workout upload target (default: igpsport) |
 | `--env-file PATH` | Override secrets file |
 | `--json` | JSON on stdout |
-| `--sport TYPE` | intervals.icu sport-settings key for `sync-zones` (default: Ride) |
+| `--sport TYPE` | intervals.icu sport-settings key (`sync-zones`); exactly `Ride` for `sync-rider-settings` |
+| `--fields LIST` | Rider fields for `sync-rider-settings`; omitted/blank means all |
+| `--dry-run` | Compute rider changes without POSTing |
+| `--show-values` | Include selected values; requires rider `--dry-run` |
 
 `sync` flags: `--max-activities`, `--force-resync`, `--activity-type`, `--download-dir`, `--keep-files`.
 
@@ -161,6 +214,7 @@ Success example:
 | `intervalssync sync` | Download recent rides → upload to intervals.icu |
 | `intervalssync upload-workouts` | Planned workouts → iGPSPORT or Bryton (`--source`) |
 | `intervalssync sync-zones` | Push thresholds + zones from intervals.icu → iGPSPORT profile |
+| `intervalssync sync-rider-settings` | Selective, verified cycling profile sync from intervals.icu → iGPSPORT |
 | `intervalssync check` | Validate `.env` keys (no network) |
 
 `@latest` means the newest stable release published to PyPI, not the newest

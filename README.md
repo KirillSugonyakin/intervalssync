@@ -65,6 +65,7 @@
 - Stores your credentials in the **OS secure vault** (Windows Credential Manager / macOS Keychain / Android Keystore), never in a file
 - Lets you know when a newer version is available
 - **Sync zones to iGPSPORT** — push FTP, LTHR, max HR, weight, and power/HR zones from intervals.icu into your iGPSPORT profile (Settings → iGPSPORT profile, or `intervalssync sync-zones`; the app prompts on launch when thresholds differ)
+- **Verified rider-settings sync** — use `intervalssync sync-rider-settings` to treat intervals.icu as the source of truth for cycling FTP, HR/power zones, max/resting/threshold HR, weight, height, birth date, and sex. Select individual fields or sync all, preview safely with `--dry-run`, and verify every write by reading iGPSPORT back.
 - **Headless CLI** — activity sync, workout upload, and iGPSPORT zone/threshold sync from the terminal, with JSON output and exit codes for automation and AI agents (see [CLI & automation](#cli--automation-ai-agents))
 - **China iGPSPORT region** — accounts on [app.igpsport.cn](https://app.igpsport.cn/login) use a separate API; choose **China** in Settings (or `INTERVALSSYNC_IGPSPORT_REGION=china` in the CLI)
 
@@ -105,7 +106,7 @@ isn't on the Play Store, so the "unknown source" prompt is expected.
 
 ## CLI & automation (AI agents)
 
-Headless `intervalssync` CLI — sync from iGPSPORT or Bryton, upload workouts to iGPSPORT or Bryton, sync thresholds and zones to iGPSPORT, JSON on stdout. See [Agent / headless sync](docs/AGENT.md).
+Headless `intervalssync` CLI — sync from iGPSPORT or Bryton, upload workouts to iGPSPORT or Bryton, and sync cycling rider settings from intervals.icu to iGPSPORT, with JSON on stdout. See [Agent / headless sync](docs/AGENT.md).
 
 With [uv](https://docs.astral.sh/uv/) installed, run the latest stable release
 directly from PyPI—no clone or manual upgrade required:
