@@ -15,6 +15,8 @@ uv run intervalssync sync                          # iGPSPORT (default)
 uv run intervalssync sync --source bryton          # Bryton Active
 uv run intervalssync upload-workouts --json        # intervals.icu → iGPSPORT
 uv run intervalssync sync-zones --env-file .env --json   # intervals.icu → iGPSPORT profile
+uv run intervalssync sync-rider-settings --env-file .env --json  # verified source-of-truth sync
+uv run intervalssync sync-rider-settings --fields hr_zones,power_zones --dry-run --show-values --json
 uv run intervalssync check --source bryton
 uv run flet build windows
 uv run pytest
@@ -39,7 +41,8 @@ src/intervalssync/
 
 - **`intervals_icu.py`** — shared upload, skip-existing (`external_id`), sport PUT, calendar workout fetch, sport-settings lookup (`fetch_sport_settings`, `max_hr`).
 - **`igpsport/core.py`** — `sync(SyncConfig, progress)`: login → list → FIT URL → download → upload. `external_id`: `igpsport_{ride_id}`.
-- **`igpsport/profile_sync.py`** — `sync_profile_zones`: intervals.icu sport settings + athlete weight → iGPSPORT profile thresholds/zones/weight.
+- **`igpsport/profile_sync.py`** — legacy `sync_profile_zones` plus `sync_rider_settings`, the selective, dependency-aware, read-back-verified intervals.icu → iGPSPORT profile path.
+- **`igpsport/zone_map.py`** — strict named-model adapters for direct five-zone and Friel HR schemes and Coggan power schemes. Unknown structures fail closed.
 - **`igpsport/workout.py`** — planned workouts intervals.icu → iGPSPORT.
 - **`bryton/ddp.py`** — Meteor DDP login + `activityList` subscription.
 - **`bryton/api.py`** — `GET https://m3.brytonactive.com/api/activity?id=…` (FIT download; Android app API).

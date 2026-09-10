@@ -55,15 +55,17 @@
 
 - Syncs recent rides from **iGPSPORT** or **Bryton Active** to **intervals.icu** (original `.fit` files)
 - **Optional Dropbox upload** — mirror activities to a Dropbox folder from the GUI (iGPSPORT or Bryton sync)
-- **Upload workouts** — push planned cycling workouts from your intervals.icu calendar to iGPSPORT custom workouts or Bryton Active (sync to your head unit from the vendor app)
+- **Upload and refresh workouts** — create planned cycling workouts from intervals.icu on iGPSPORT or Bryton Active; iGPSPORT uploads keep a durable identity, update changed plans in place, and recreate a manually deleted workout while it is still in the configured calendar window
 - **Skips activities already uploaded** so re-running is safe — with an optional *force re-sync*
 - Lets you choose how many recent activities to process
 - **Workout upload window** in Settings — how many calendar days to upload (default: today only)
+- Add **`[skip-igp]`** to an Intervals workout name or description to suppress its iGPSPORT create, update, and recreation while the marker remains. Removing it resumes sync. The old text `[ignore-igp]` has no special behavior.
 - **Sets the intervals.icu sport type** after upload (e.g. Mountain Bike Ride / Gravel Ride) — iGPSPORT exports everything as a generic "Ride"
 - Optionally deletes the local `.fit` files after a successful upload
 - Stores your credentials in the **OS secure vault** (Windows Credential Manager / macOS Keychain / Android Keystore), never in a file
 - Lets you know when a newer version is available
 - **Sync zones to iGPSPORT** — push FTP, LTHR, max HR, weight, and power/HR zones from intervals.icu into your iGPSPORT profile (Settings → iGPSPORT profile, or `intervalssync sync-zones`; the app prompts on launch when thresholds differ)
+- **Verified rider-settings sync** — use `intervalssync sync-rider-settings` to treat intervals.icu as the source of truth for cycling FTP, HR/power zones, max/resting/threshold HR, weight, height, birth date, and sex. Select individual fields or sync all, preview safely with `--dry-run`, and verify every write by reading iGPSPORT back.
 - **Headless CLI** — activity sync, workout upload, and iGPSPORT zone/threshold sync from the terminal, with JSON output and exit codes for automation and AI agents (see [CLI & automation](#cli--automation-ai-agents))
 - **China iGPSPORT region** — accounts on [app.igpsport.cn](https://app.igpsport.cn/login) use a separate API; choose **China** in Settings (or `INTERVALSSYNC_IGPSPORT_REGION=china` in the CLI)
 
@@ -104,7 +106,7 @@ isn't on the Play Store, so the "unknown source" prompt is expected.
 
 ## CLI & automation (AI agents)
 
-Headless `intervalssync` CLI — sync from iGPSPORT or Bryton, upload workouts to iGPSPORT or Bryton, sync thresholds and zones to iGPSPORT, JSON on stdout. See [Agent / headless sync](docs/AGENT.md).
+Headless `intervalssync` CLI — sync from iGPSPORT or Bryton, upload workouts to iGPSPORT or Bryton, and sync cycling rider settings from intervals.icu to iGPSPORT, with JSON on stdout. See [Agent / headless sync](docs/AGENT.md).
 
 With [uv](https://docs.astral.sh/uv/) installed, run the latest stable release
 directly from PyPI—no clone or manual upgrade required:

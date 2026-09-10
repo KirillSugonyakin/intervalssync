@@ -20,13 +20,19 @@ from ..bryton.exceptions import BrytonSyncError
 from ..igpsport.core import SyncConfig as IgpSyncConfig
 from ..igpsport.core import SyncError as IgpSyncError
 from ..igpsport.core import SyncResult as IgpSyncResult
+from ..igpsport.core import apply_uploaded_activity_map
 from ..igpsport.core import sync as igpsport_sync
 from ..igpsport.profile_sync import (
     ProfileSyncConfig,
     ProfileSyncResult,
+    RiderSettingsSyncConfig,
+    RiderSettingsSyncResult,
+    parse_rider_fields,
     result_payload as profile_sync_result_payload,
+    sync_rider_settings,
     sync_profile_zones,
 )
+from ..igpsport.zone_map import ZONE_ADAPTER_VERSION
 from ..bryton.workout import (
     BrytonWorkoutUploadConfig,
     BrytonWorkoutUploadResult,
@@ -36,9 +42,10 @@ from ..bryton.workout import (
 from ..igpsport.workout import (
     WorkoutUploadConfig,
     WorkoutUploadResult,
-    apply_uploaded_workout_map,
+    apply_workout_state,
     upload_workouts,
 )
+from ..igpsport.zone_map import ZONE_ADAPTER_VERSION
 from . import config as cli_config_module
 from .env import ActivitySource, CliConfigError, load_credentials, resolve_env_path
 
@@ -68,6 +75,7 @@ def _build_igpsport_sync_config(
             delete_after_upload if delete_after_upload is not None else config.delete_after_upload
         ),
         force_resync=force_resync if force_resync is not None else config.force_resync,
+        uploaded_activities=dict(config.uploaded_activities),
         activity_type=activity_type if activity_type is not None else config.activity_type,
         list_activities=True,
         get_download_url=True,
@@ -110,9 +118,11 @@ def _igpsport_result_payload(result: IgpSyncResult, *, ok: bool, error: str | No
         "source": "igpsport",
         "listed": result.listed,
         "uploaded": result.uploaded,
+        "linked": result.linked,
         "skipped": result.skipped,
         "failed": result.failed,
         "downloaded": result.downloaded,
+        "activity_map": result.activity_map,
         "activities": [
             {
                 "ride_id": act.ride_id,
@@ -157,6 +167,7 @@ def _emit_json(payload: dict) -> None:
 def _emit_igpsport_text_summary(result: IgpSyncResult) -> None:
     print(
         f"Done — uploaded {result.uploaded}, "
+        f"linked {result.linked}, "
         f"downloaded {result.downloaded}, "
         f"skipped {result.skipped}, "
         f"failed {result.failed}."
@@ -188,6 +199,11 @@ def _build_workout_upload_config(
             workout_days_ahead if workout_days_ahead is not None else config.workout_days_ahead
         ),
         uploaded_workouts=dict(config.uploaded_workouts),
+        workout_records={
+            str(key): dict(value)
+            for key, value in config.workout_records.items()
+            if isinstance(value, dict)
+        },
         force_resync=force_resync if force_resync is not None else config.force_resync,
     )
 
@@ -223,10 +239,17 @@ def _workout_result_payload(
         "source": source,
         "listed": result.listed,
         "uploaded": result.uploaded,
+        "updated": getattr(result, "updated", 0),
+        "recreated": getattr(result, "recreated", 0),
         "skipped": result.skipped,
         "failed": result.failed,
+        "conflicted": getattr(result, "conflicted", 0),
         "no_steps": result.no_steps,
+        "description_truncated": getattr(result, "description_truncated", 0),
     }
+    if isinstance(result, WorkoutUploadResult):
+        payload["uploaded_map"] = result.uploaded_map
+        payload["synced_map"] = result.synced_map
     if error is not None:
         payload["error"] = error
     return payload
@@ -235,8 +258,54 @@ def _workout_result_payload(
 def _emit_workout_text_summary(result: WorkoutUploadResult | BrytonWorkoutUploadResult) -> None:
     print(
         f"Done — uploaded {result.uploaded}, "
+        f"updated {getattr(result, 'updated', 0)}, "
+        f"recreated {getattr(result, 'recreated', 0)}, "
         f"skipped {result.skipped}, "
+        f"conflicted {getattr(result, 'conflicted', 0)}, "
         f"no steps {result.no_steps}, "
+        f"failed {result.failed}."
+    )
+
+
+def _rider_settings_result_payload(
+    result: RiderSettingsSyncResult,
+    *,
+    ok: bool,
+    include_values: bool = False,
+    error: str | None = None,
+) -> dict:
+    payload = {
+        "ok": ok,
+        "source": "igpsport",
+        "requested_fields": list(result.requested_fields),
+        "effective_fields": list(result.effective_fields),
+        "field_statuses": dict(result.field_statuses),
+        "zone_models": dict(result.zone_models),
+        "zone_adapter_version": ZONE_ADAPTER_VERSION,
+        "zone_adapter_version": ZONE_ADAPTER_VERSION,
+        "selected": result.selected,
+        "updated": result.updated,
+        "verified": result.verified,
+        "unchanged": result.unchanged,
+        "source_missing": result.source_missing,
+        "failed": result.failed,
+    }
+    if include_values:
+        payload["source_values"] = result.source_values or {}
+        payload["current_values"] = result.current_values or {}
+        payload["desired_values"] = result.desired_values or {}
+    if error is not None:
+        payload["error"] = error
+    return payload
+
+
+def _emit_rider_settings_text_summary(result: RiderSettingsSyncResult) -> None:
+    print(
+        f"Done — selected {result.selected}, "
+        f"updated {result.updated}, "
+        f"verified {result.verified}, "
+        f"unchanged {result.unchanged}, "
+        f"source missing {result.source_missing}, "
         f"failed {result.failed}."
     )
 
@@ -347,6 +416,10 @@ def cmd_sync(args: argparse.Namespace) -> int:
             print(f"✗ Unexpected error: {exc}", file=sys.stderr)
         return EXIT_SYNC_ERROR
 
+    if result.activity_map or result.pruned_keys:
+        apply_uploaded_activity_map(config.uploaded_activities, result)
+        cli_config_module.save(config)
+
     ok = result.failed == 0
     if use_json:
         _emit_json(_igpsport_result_payload(result, ok=ok))
@@ -448,11 +521,17 @@ def cmd_upload_workouts(args: argparse.Namespace) -> int:
             print(f"✗ Unexpected error: {exc}", file=sys.stderr)
         return EXIT_SYNC_ERROR
 
-    if result.uploaded_map or result.pruned_keys:
-        apply_uploaded_workout_map(config.uploaded_workouts, result)
+    if (
+        result.workout_records != config.workout_records
+        or result.uploaded_map
+        or result.pruned_keys
+    ):
+        apply_workout_state(
+            config.uploaded_workouts, config.workout_records, result
+        )
         cli_config_module.save(config)
 
-    ok = result.failed == 0
+    ok = result.failed == 0 and result.conflicted == 0
     if use_json:
         _emit_json(_workout_result_payload(result, ok=ok, source=source))
     else:
@@ -513,6 +592,84 @@ def cmd_sync_zones(args: argparse.Namespace) -> int:
             f"MHR {summary.get('mhr')} synced to iGPSPORT."
         )
     return EXIT_OK
+
+
+def cmd_sync_rider_settings(args: argparse.Namespace) -> int:
+    use_json = args.json
+    try:
+        parse_rider_fields(args.fields)
+        if args.show_values and not args.dry_run:
+            raise ValueError("--show-values requires --dry-run")
+    except ValueError as exc:
+        if use_json:
+            _emit_json({"ok": False, "source": "igpsport", "error": str(exc)})
+        else:
+            print(exc, file=sys.stderr)
+        return EXIT_CONFIG_ERROR
+
+    config = cli_config_module.load()
+    try:
+        env_path = resolve_env_path(
+            env_file=Path(args.env_file) if args.env_file else None,
+            config_env_file=config.env_file or None,
+        )
+        credentials = load_credentials(env_path, source="igpsport")
+    except CliConfigError as exc:
+        if use_json:
+            _emit_json({"ok": False, "source": "igpsport", "error": str(exc)})
+        else:
+            print(exc, file=sys.stderr)
+        return EXIT_CONFIG_ERROR
+
+    sync_config = RiderSettingsSyncConfig(
+        igp_user=credentials.igp_user,
+        igp_password=credentials.igp_password,
+        intervals_api_key=credentials.intervals_api_key,
+        igp_region=credentials.igp_region,
+        sport=args.sport,
+        fields=args.fields,
+        dry_run=args.dry_run,
+        show_values=args.show_values,
+    )
+
+    def progress(message: str) -> None:
+        print(message, file=sys.stderr)
+
+    try:
+        result = sync_rider_settings(sync_config, progress=progress)
+    except IgpSyncError as exc:
+        empty = RiderSettingsSyncResult((), (), {}, {}, 0, 0, 0, 0, 0, 1)
+        if use_json:
+            _emit_json(
+                _rider_settings_result_payload(empty, ok=False, error=str(exc))
+            )
+        else:
+            print(f"✗ {exc}", file=sys.stderr)
+        return EXIT_SYNC_ERROR
+    except Exception as exc:  # noqa: BLE001
+        empty = RiderSettingsSyncResult((), (), {}, {}, 0, 0, 0, 0, 0, 1)
+        if use_json:
+            _emit_json(
+                _rider_settings_result_payload(
+                    empty, ok=False, error=f"Unexpected error: {exc}"
+                )
+            )
+        else:
+            print(f"✗ Unexpected error: {exc}", file=sys.stderr)
+        return EXIT_SYNC_ERROR
+
+    ok = result.failed == 0
+    if use_json:
+        _emit_json(
+            _rider_settings_result_payload(
+                result,
+                ok=ok,
+                include_values=args.dry_run and args.show_values,
+            )
+        )
+    else:
+        _emit_rider_settings_text_summary(result)
+    return EXIT_OK if ok else EXIT_SYNC_ERROR
 
 
 def _add_source_arg(parser: argparse.ArgumentParser) -> None:
@@ -623,6 +780,34 @@ def _build_parser() -> argparse.ArgumentParser:
         help='intervals.icu sport-settings key (default: "Ride").',
     )
     sync_zones_parser.set_defaults(func=cmd_sync_zones)
+
+    sync_rider_settings_parser = subparsers.add_parser(
+        "sync-rider-settings",
+        parents=[common],
+        help="Push selected cycling rider settings from intervals.icu to iGPSPORT.",
+    )
+    sync_rider_settings_parser.add_argument(
+        "--sport",
+        choices=("Ride",),
+        default="Ride",
+        help='Sport settings key (currently only "Ride").',
+    )
+    sync_rider_settings_parser.add_argument(
+        "--fields",
+        metavar="LIST",
+        help="Comma-separated field list; omitted or blank selects every supported field.",
+    )
+    sync_rider_settings_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Calculate changes without writing them.",
+    )
+    sync_rider_settings_parser.add_argument(
+        "--show-values",
+        action="store_true",
+        help="Include source/current/desired values (requires --dry-run).",
+    )
+    sync_rider_settings_parser.set_defaults(func=cmd_sync_rider_settings)
 
     return parser
 

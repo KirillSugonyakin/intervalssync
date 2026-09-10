@@ -34,6 +34,7 @@ def _write_env(path: Path, **overrides: str) -> None:
     lines = [f"{key}={value}" for key, value in values.items()]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
+
 def _write_bryton_env(path: Path, **overrides: str) -> None:
     values = {
         cli_env.BRYTON_EMAIL_KEY: "rider@example.com",
@@ -124,7 +125,9 @@ def test_check_ok(tmp_path: Path, capsys):
     env_file = tmp_path / ".env"
     _write_env(env_file)
 
-    args = cli._build_parser().parse_args(["check", "--env-file", str(env_file), "--json"])
+    args = cli._build_parser().parse_args(
+        ["check", "--env-file", str(env_file), "--json"]
+    )
     assert cli.cmd_check(args) == cli.EXIT_OK
 
     out = capsys.readouterr().out
@@ -137,7 +140,9 @@ def test_check_missing_credentials(tmp_path: Path, capsys):
     env_file = tmp_path / ".env"
     env_file.write_text("INTERVALSSYNC_IGPSPORT_USER=incomplete\n", encoding="utf-8")
 
-    args = cli._build_parser().parse_args(["check", "--env-file", str(env_file), "--json"])
+    args = cli._build_parser().parse_args(
+        ["check", "--env-file", str(env_file), "--json"]
+    )
     assert cli.cmd_check(args) == cli.EXIT_CONFIG_ERROR
 
     payload = json.loads(capsys.readouterr().out)
@@ -148,23 +153,37 @@ def test_check_missing_credentials(tmp_path: Path, capsys):
 def test_sync_json_success(tmp_path: Path, monkeypatch, capsys):
     env_file = tmp_path / ".env"
     _write_env(env_file)
+    monkeypatch.setattr(cli_config, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(cli_config, "CONFIG_PATH", tmp_path / "config.json")
+    cli_config.save(cli_config.CliConfig(uploaded_activities={"7": "old-i7"}))
 
     activities = [core.Activity(1, "Ride", "2026-06-15 08:00:00")]
 
     def fake_sync(config, progress=None):
+        assert config.uploaded_activities == {"7": "old-i7"}
+        config.uploaded_activities["999"] = "must-not-leak"
         if progress:
             progress("working")
         return core.SyncResult(
             listed=1,
             downloaded=1,
-            uploaded=1,
+            linked=1,
             activities=activities,
+            activity_map={"1": "i1"},
+            pruned_keys=["7"],
         )
 
     monkeypatch.setattr(cli, "igpsport_sync", fake_sync)
 
     args = cli._build_parser().parse_args(
-        ["sync", "--env-file", str(env_file), "--json", "--download-dir", str(tmp_path / "dl")]
+        [
+            "sync",
+            "--env-file",
+            str(env_file),
+            "--json",
+            "--download-dir",
+            str(tmp_path / "dl"),
+        ]
     )
     assert cli.cmd_sync(args) == cli.EXIT_OK
 
@@ -172,8 +191,69 @@ def test_sync_json_success(tmp_path: Path, monkeypatch, capsys):
     assert "working" in captured.err
     payload = json.loads(captured.out)
     assert payload["ok"] is True
-    assert payload["uploaded"] == 1
+    assert payload["uploaded"] == 0
+    assert payload["linked"] == 1
+    assert payload["activity_map"] == {"1": "i1"}
     assert payload["activities"][0]["ride_id"] == 1
+    assert cli_config.load().uploaded_activities == {"1": "i1"}
+
+
+def test_sync_persists_activity_map_after_partial_failure(
+    tmp_path: Path, monkeypatch, capsys
+):
+    env_file = tmp_path / ".env"
+    _write_env(env_file)
+    monkeypatch.setattr(cli_config, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(cli_config, "CONFIG_PATH", tmp_path / "config.json")
+
+    monkeypatch.setattr(
+        cli,
+        "igpsport_sync",
+        lambda config, progress=None: core.SyncResult(
+            uploaded=1,
+            failed=1,
+            activity_map={"2": "i2"},
+        ),
+    )
+
+    args = cli._build_parser().parse_args(
+        ["sync", "--env-file", str(env_file), "--json"]
+    )
+    assert cli.cmd_sync(args) == cli.EXIT_SYNC_ERROR
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False
+    assert payload["activity_map"] == {"2": "i2"}
+    assert cli_config.load().uploaded_activities == {"2": "i2"}
+
+
+def test_sync_exception_does_not_change_activity_map(
+    tmp_path: Path, monkeypatch, capsys
+):
+    env_file = tmp_path / ".env"
+    _write_env(env_file)
+    monkeypatch.setattr(cli_config, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(cli_config, "CONFIG_PATH", tmp_path / "config.json")
+    cli_config.save(cli_config.CliConfig(uploaded_activities={"7": "old-i7"}))
+
+    def fake_sync(config, progress=None):
+        config.uploaded_activities["999"] = "must-not-leak"
+        raise core.SyncError("lookup failed")
+
+    monkeypatch.setattr(cli, "igpsport_sync", fake_sync)
+
+    args = cli._build_parser().parse_args(
+        ["sync", "--env-file", str(env_file), "--json"]
+    )
+    assert cli.cmd_sync(args) == cli.EXIT_SYNC_ERROR
+
+    assert cli_config.load().uploaded_activities == {"7": "old-i7"}
+
+
+def test_igpsport_text_summary_includes_linked(capsys):
+    cli._emit_igpsport_text_summary(core.SyncResult(uploaded=1, linked=2))
+
+    assert "uploaded 1, linked 2," in capsys.readouterr().out
 
 
 def test_sync_json_sync_error(tmp_path: Path, monkeypatch, capsys):
@@ -185,7 +265,9 @@ def test_sync_json_sync_error(tmp_path: Path, monkeypatch, capsys):
 
     monkeypatch.setattr(cli, "igpsport_sync", fake_sync)
 
-    args = cli._build_parser().parse_args(["sync", "--env-file", str(env_file), "--json"])
+    args = cli._build_parser().parse_args(
+        ["sync", "--env-file", str(env_file), "--json"]
+    )
     assert cli.cmd_sync(args) == cli.EXIT_SYNC_ERROR
 
     payload = json.loads(capsys.readouterr().out)
@@ -197,11 +279,29 @@ def test_cli_config_roundtrip(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(cli_config, "CONFIG_DIR", tmp_path)
     monkeypatch.setattr(cli_config, "CONFIG_PATH", tmp_path / "config.json")
 
-    cfg = cli_config.CliConfig(env_file="/custom/.env", max_activities=10)
+    cfg = cli_config.CliConfig(
+        env_file="/custom/.env",
+        max_activities=10,
+        uploaded_activities={"123": "i456"},
+    )
     cli_config.save(cfg)
     loaded = cli_config.load()
     assert loaded.env_file == "/custom/.env"
     assert loaded.max_activities == 10
+    assert loaded.uploaded_activities == {"123": "i456"}
+
+
+def test_cli_config_loads_legacy_file_without_uploaded_activities(
+    tmp_path: Path, monkeypatch
+):
+    monkeypatch.setattr(cli_config, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(cli_config, "CONFIG_PATH", tmp_path / "config.json")
+    cli_config.CONFIG_PATH.write_text('{"max_activities": 9}', encoding="utf-8")
+
+    loaded = cli_config.load()
+
+    assert loaded.max_activities == 9
+    assert loaded.uploaded_activities == {}
 
 
 def test_upload_workouts_parser_accepts_flags():
@@ -225,14 +325,35 @@ def test_upload_workouts_json_success(tmp_path: Path, monkeypatch, capsys):
         return workout.WorkoutUploadResult(
             listed=2,
             uploaded=1,
+            updated=2,
+            recreated=1,
             skipped=1,
+            description_truncated=1,
             uploaded_map={"42": 100},
+            synced_map={"42": 100},
+            workout_records={
+                "record": {
+                    "event_id": "42",
+                    "remote_id": 100,
+                    "source_key": "record",
+                    "slot_key": "slot",
+                    "export_fingerprint": "fingerprint",
+                    "start_date_local": "2026-09-10",
+                }
+            },
         )
 
     monkeypatch.setattr(cli, "upload_workouts", fake_upload)
 
     args = cli._build_parser().parse_args(
-        ["upload-workouts", "--env-file", str(env_file), "--json", "--workout-days-ahead", "2"]
+        [
+            "upload-workouts",
+            "--env-file",
+            str(env_file),
+            "--json",
+            "--workout-days-ahead",
+            "2",
+        ]
     )
     assert cli.cmd_upload_workouts(args) == cli.EXIT_OK
 
@@ -242,11 +363,17 @@ def test_upload_workouts_json_success(tmp_path: Path, monkeypatch, capsys):
     assert payload["ok"] is True
     assert payload["source"] == "igpsport"
     assert payload["uploaded"] == 1
+    assert payload["updated"] == 2
+    assert payload["recreated"] == 1
     assert payload["skipped"] == 1
+    assert payload["conflicted"] == 0
+    assert payload["description_truncated"] == 1
+    assert payload["synced_map"] == {"42": 100}
     assert payload["no_steps"] == 0
 
     loaded = cli_config.load()
     assert loaded.uploaded_workouts == {"42": 100}
+    assert loaded.workout_records["record"]["export_fingerprint"] == "fingerprint"
     assert loaded.workout_days_ahead == 1
 
 
@@ -388,3 +515,125 @@ def test_sync_zones_json_sync_error(tmp_path: Path, monkeypatch, capsys):
     payload = json.loads(capsys.readouterr().out)
     assert payload["ok"] is False
     assert payload["error"] == "profile update failed"
+
+
+def _fake_rider_result():
+    from intervalssync.igpsport.profile_sync import RiderSettingsSyncResult
+
+    return RiderSettingsSyncResult(
+        requested_fields=("hr_zones",),
+        effective_fields=("max_hr", "lthr", "hr_zones"),
+        field_statuses={
+            "max_hr": "unchanged",
+            "lthr": "unchanged",
+            "hr_zones": "verified",
+        },
+        zone_models={"hr_zones": "friel_7"},
+        selected=3,
+        updated=1,
+        verified=1,
+        unchanged=2,
+        source_missing=0,
+        failed=0,
+        source_values={"hr_zones": [120, 140, 160, 175, 185, 190, 195]},
+        current_values={"hr_zones": [130, 150, 170, 185, 195]},
+        desired_values={"hr_zones": [120, 140, 160, 175, 195]},
+    )
+
+
+def test_sync_rider_settings_parser_accepts_selective_dry_run_flags():
+    args = cli._build_parser().parse_args(
+        [
+            "sync-rider-settings",
+            "--sport",
+            "Ride",
+            "--fields",
+            "hr_zones,power_zones",
+            "--dry-run",
+            "--show-values",
+            "--json",
+        ]
+    )
+
+    assert args.command == "sync-rider-settings"
+    assert args.fields == "hr_zones,power_zones"
+    assert args.dry_run is True
+    assert args.show_values is True
+
+
+@pytest.mark.parametrize(
+    "extra_args",
+    [
+        ["--fields", "ftp,ftp"],
+        ["--fields", "ftp,,lthr"],
+        ["--fields", "unknown"],
+        ["--show-values"],
+    ],
+)
+def test_sync_rider_settings_validates_before_credentials(
+    extra_args, monkeypatch, capsys
+):
+    monkeypatch.setattr(
+        cli,
+        "load_credentials",
+        lambda *a, **k: pytest.fail("credentials loaded before validation"),
+    )
+    args = cli._build_parser().parse_args(
+        ["sync-rider-settings", "--json", *extra_args]
+    )
+
+    assert cli.cmd_sync_rider_settings(args) == cli.EXIT_CONFIG_ERROR
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False
+
+
+def test_sync_rider_settings_json_is_status_only_by_default(
+    tmp_path: Path, monkeypatch, capsys
+):
+    env_file = tmp_path / ".env"
+    _write_env(env_file)
+    monkeypatch.setattr(cli, "sync_rider_settings", lambda *a, **k: _fake_rider_result())
+    args = cli._build_parser().parse_args(
+        [
+            "sync-rider-settings",
+            "--env-file",
+            str(env_file),
+            "--fields",
+            "hr_zones",
+            "--json",
+        ]
+    )
+
+    assert cli.cmd_sync_rider_settings(args) == cli.EXIT_OK
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["field_statuses"]["hr_zones"] == "verified"
+    assert payload["zone_models"] == {"hr_zones": "friel_7"}
+    assert payload["zone_adapter_version"] == 1
+    assert "source_values" not in payload
+    assert "current_values" not in payload
+    assert "desired_values" not in payload
+
+
+def test_sync_rider_settings_dry_run_show_values_is_explicit(
+    tmp_path: Path, monkeypatch, capsys
+):
+    env_file = tmp_path / ".env"
+    _write_env(env_file)
+    monkeypatch.setattr(cli, "sync_rider_settings", lambda *a, **k: _fake_rider_result())
+    args = cli._build_parser().parse_args(
+        [
+            "sync-rider-settings",
+            "--env-file",
+            str(env_file),
+            "--fields",
+            "hr_zones",
+            "--dry-run",
+            "--show-values",
+            "--json",
+        ]
+    )
+
+    assert cli.cmd_sync_rider_settings(args) == cli.EXIT_OK
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["source_values"]["hr_zones"][-1] == 195
+    assert payload["desired_values"]["hr_zones"][-1] == 195
