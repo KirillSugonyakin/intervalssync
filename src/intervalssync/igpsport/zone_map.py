@@ -134,16 +134,19 @@ def detect_hr_zone_scheme(
     names: list[str],
     upper_bounds: list[float],
     *,
-    lthr: float,
+    lthr: float | None,
     max_hr: float,
 ) -> ZoneScheme:
     """Detect a supported HR model only when its numeric structure is valid."""
     bounds = _numeric_bounds(upper_bounds) or ()
     try:
         normalized_lthr = float(lthr)
+    except (TypeError, ValueError):
+        normalized_lthr = 0.0
+    try:
         normalized_max_hr = float(max_hr)
     except (TypeError, ValueError):
-        normalized_lthr = normalized_max_hr = 0.0
+        normalized_max_hr = 0.0
     model = recognize_zone_model("hr", names)
     valid_thresholds = (
         isfinite(normalized_lthr)
@@ -164,7 +167,8 @@ def detect_hr_zone_scheme(
     if (
         model is ZoneModel.DIRECT_5
         and len(bounds) == 5
-        and valid_thresholds
+        and isfinite(normalized_max_hr)
+        and normalized_max_hr > 0
         and _strictly_increasing(bounds)
         and all(bound < normalized_max_hr for bound in bounds[:-1])
         and bounds[-1] == normalized_max_hr

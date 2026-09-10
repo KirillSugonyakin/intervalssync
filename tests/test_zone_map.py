@@ -121,6 +121,16 @@ def test_detect_hr_zone_scheme_accepts_open_final_band_ending_at_max_hr():
     )[-1]["end"] == 193
 
 
+def test_detect_direct_five_hr_without_lthr_preserves_explicit_bpm_shape():
+    names = ["Recovery", "Endurance", "Tempo", "Threshold", "VO2 Max"]
+    bounds = [120, 145, 165, 180, 193]
+
+    scheme = detect_hr_zone_scheme(names, bounds, lthr=None, max_hr=193)
+
+    assert scheme.model is ZoneModel.DIRECT_5
+    assert scheme.basis == "custom"
+
+
 @pytest.mark.parametrize(
     ("bounds", "ftp"),
     [
