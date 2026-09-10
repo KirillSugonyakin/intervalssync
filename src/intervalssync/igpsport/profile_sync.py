@@ -477,14 +477,30 @@ def build_rider_settings_plan(
 
 
 def _verify_interval_state(actual: dict[str, Any], expected: dict[str, Any]) -> bool:
-    keys = (
-        "member",
+    if actual.get("member") != expected.get("member"):
+        return False
+
+    def without_server_ids(value: Any) -> Any:
+        if not isinstance(value, list):
+            return value
+        return [
+            {key: item for key, item in row.items() if key != "id"}
+            if isinstance(row, dict)
+            else row
+            for row in value
+        ]
+
+    table_keys = (
         "power",
         "heartRate",
         "heartRateReserve",
         "heartRateLactateThreshold",
     )
-    return all(actual.get(key) == expected.get(key) for key in keys)
+    return all(
+        without_server_ids(actual.get(key))
+        == without_server_ids(expected.get(key))
+        for key in table_keys
+    )
 
 
 def _verify_personal_state(actual: dict[str, Any], expected: dict[str, Any]) -> bool:

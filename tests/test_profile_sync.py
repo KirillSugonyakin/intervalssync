@@ -7,6 +7,7 @@ import copy
 import pytest
 
 from intervalssync.igpsport.profile_sync import (
+    _verify_interval_state,
     RiderSettingsSyncConfig,
     ProfileSyncConfig,
     apply_intervals_settings,
@@ -408,6 +409,32 @@ def test_sync_rider_settings_reports_readback_mismatch(monkeypatch):
     assert result.updated == 1
     assert result.field_statuses == {"ftp": "verify_failed"}
     assert result.failed == 1
+
+
+def test_interval_verifier_ignores_server_regenerated_zone_ids_only():
+    expected = _rider_interval_destination()
+    actual = copy.deepcopy(expected)
+    for table_name in (
+        "power",
+        "heartRate",
+        "heartRateReserve",
+        "heartRateLactateThreshold",
+    ):
+        for row in actual[table_name]:
+            row["id"] += 1000
+
+    assert _verify_interval_state(actual, expected)
+
+    actual["power"][0]["end"] += 1
+    assert not _verify_interval_state(actual, expected)
+
+
+def test_interval_verifier_detects_inactive_hr_table_changes():
+    expected = _rider_interval_destination()
+    actual = copy.deepcopy(expected)
+    actual["heartRateReserve"][0]["end"] += 1
+
+    assert not _verify_interval_state(actual, expected)
 
 
 def test_sync_rider_settings_dry_run_can_show_values_without_writes(monkeypatch):
