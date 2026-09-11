@@ -8,6 +8,7 @@ from typing import Any
 
 import requests
 
+from .http import HTTP_TIMEOUT
 from .region import INTERNATIONAL, IgpRegionConfig, resolve_region
 
 IGPS_MOBILE_API = INTERNATIONAL.mobile_api_base
@@ -92,7 +93,9 @@ def fetch_personal_interval_info(
     cfg = resolve_region(region.name if isinstance(region, IgpRegionConfig) else region)
     get_headers = {k: v for k, v in headers.items() if k.lower() != "content-type"}
     try:
-        resp = session.get(cfg.get_interval_url, headers=get_headers, timeout=30)
+        resp = session.get(
+            cfg.get_interval_url, headers=get_headers, timeout=HTTP_TIMEOUT
+        )
     except requests.RequestException as exc:
         raise RuntimeError(f"GET UserIntervalInfo failed: {exc}") from exc
 
@@ -123,7 +126,7 @@ def update_personal_interval_info(
     cfg = resolve_region(region.name if isinstance(region, IgpRegionConfig) else region)
     try:
         resp = session.post(
-            cfg.update_interval_url, headers=headers, json=body, timeout=30
+            cfg.update_interval_url, headers=headers, json=body, timeout=HTTP_TIMEOUT
         )
     except requests.RequestException as exc:
         raise RuntimeError(f"POST UpdatePersonalIntervalInfo failed: {exc}") from exc
@@ -154,7 +157,7 @@ def fetch_user_info(
     cfg = resolve_region(region.name if isinstance(region, IgpRegionConfig) else region)
     get_headers = {k: v for k, v in headers.items() if k.lower() != "content-type"}
     try:
-        resp = session.get(cfg.user_info_url, headers=get_headers, timeout=30)
+        resp = session.get(cfg.user_info_url, headers=get_headers, timeout=HTTP_TIMEOUT)
     except requests.RequestException as exc:
         raise RuntimeError(f"GET UserInfo failed: {exc}") from exc
 
@@ -236,7 +239,7 @@ def update_personal_user_info(
             cfg.update_personal_user_info_url,
             headers=headers,
             json=body,
-            timeout=30,
+            timeout=HTTP_TIMEOUT,
         )
     except requests.RequestException as exc:
         raise RuntimeError(f"POST UpdatePersonalUserInfo failed: {exc}") from exc

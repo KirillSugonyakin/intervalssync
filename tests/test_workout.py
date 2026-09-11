@@ -144,18 +144,23 @@ def test_icu_workout_doc_includes_existing_id_for_update():
 
 
 def test_upload_custom_workout_returns_id(monkeypatch):
+    captured = {}
+
+    def fake_post(self, *args, **kwargs):
+        captured.update(kwargs)
+        return FakeResponse(json_data={"code": 0, "data": {"workoutId": 999}})
+
     monkeypatch.setattr(
         workout.requests.Session,
         "post",
-        lambda self, *a, **k: FakeResponse(
-            json_data={"code": 0, "data": {"workoutId": 999}}
-        ),
+        fake_post,
     )
     session = workout.requests.Session()
     wid = workout.upload_custom_workout(
         session, {"Authorization": "Bearer x"}, {"data": {}}
     )
     assert wid == 999
+    assert captured["timeout"] == (10, 30)
 
 
 def test_upload_custom_workout_returns_none_on_error(monkeypatch):
@@ -174,6 +179,7 @@ def test_list_custom_workouts(monkeypatch):
     def fake_get(self, url, **kwargs):
         captured["url"] = url
         captured["params"] = kwargs.get("params")
+        captured["timeout"] = kwargs.get("timeout")
         return FakeResponse(json_data={"code": 0, "data": {"items": []}})
 
     monkeypatch.setattr(workout.requests.Session, "get", fake_get)
@@ -183,6 +189,7 @@ def test_list_custom_workouts(monkeypatch):
     )
     assert captured["url"] == workout.IGPS_WORKOUT_LIST_URL
     assert captured["params"] == {"PageIndex": 2, "PageSize": 5}
+    assert captured["timeout"] == (10, 30)
 
 
 def test_list_custom_workouts_china_region(monkeypatch):
