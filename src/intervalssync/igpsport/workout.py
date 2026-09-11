@@ -18,6 +18,7 @@ import requests
 
 from .. import intervals_icu
 from .core import SyncError, login
+from .http import HTTP_TIMEOUT
 from .region import IgpRegionConfig, resolve_region
 
 IGPS_API = "https://prod.en.igpsport.com"
@@ -91,6 +92,7 @@ def list_custom_workouts(
         cfg.workout_list_url,
         params={"PageIndex": page_index, "PageSize": page_size},
         headers=auth_headers,
+        timeout=HTTP_TIMEOUT,
     )
     resp.raise_for_status()
     return resp.json()
@@ -257,7 +259,12 @@ def upload_custom_workout(
 ) -> int | None:
     """Create or update a custom workout; return workoutId on success."""
     cfg = resolve_region(region.name if isinstance(region, IgpRegionConfig) else region)
-    resp = session.post(cfg.workout_edit_url, json=body, headers=auth_headers)
+    resp = session.post(
+        cfg.workout_edit_url,
+        json=body,
+        headers=auth_headers,
+        timeout=HTTP_TIMEOUT,
+    )
     if not resp.ok:
         return None
     data = resp.json()

@@ -654,6 +654,42 @@ def test_update_user_weight_posts_personal_user_info(monkeypatch):
         "weight": 76.0,
     }
 
+
+def test_interval_info_requests_use_bounded_connect_and_read_timeouts():
+    from intervalssync.igpsport import interval_info
+
+    calls = []
+
+    class FakeResp:
+        ok = True
+        status_code = 200
+
+        def __init__(self, body):
+            self.body = body
+
+        def json(self):
+            return self.body
+
+    class FakeSession:
+        def get(self, url, **kwargs):
+            calls.append(kwargs.get("timeout"))
+            if url.endswith("UserIntervalInfo"):
+                return FakeResp({"code": 0, "data": {"member": {}}})
+            return FakeResp({"code": 0, "data": {}})
+
+        def post(self, url, **kwargs):
+            calls.append(kwargs.get("timeout"))
+            return FakeResp({"code": 0, "data": {}})
+
+    session = FakeSession()
+    headers = {"Authorization": "Bearer x"}
+    interval_info.fetch_personal_interval_info(session, headers)
+    interval_info.update_personal_interval_info(session, headers, {})
+    interval_info.fetch_user_info(session, headers)
+    interval_info.update_personal_user_info(session, headers, {})
+
+    assert calls == [(10, 30), (10, 30), (10, 30), (10, 30)]
+
     body = apply_intervals_settings(_igpsport_payload(), _ride_settings())
     status = compare_profile_thresholds(
         body, _ride_settings(), weight=76.1, current_weight=79.0

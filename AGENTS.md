@@ -22,6 +22,6 @@ iGPSPORT integration.
   explicit `--dry-run --show-values` combination.
 - Develop test-first and run the focused tests followed by the complete offline
   pytest suite. Confirm formatting/diff checks before committing.
-- The immutable rider-settings revision currently deployed by the relay is
-  `81f49ad5356aa41609214bae34bc682497c14ead`. Update downstream pins and docs
-  deliberately when changing that contract.
+- The immutable upstream revision deployed by the relay is recorded in the
+  downstream relay Dockerfile. Update that pin and its documentation deliberately
+  when changing the integration contract.
