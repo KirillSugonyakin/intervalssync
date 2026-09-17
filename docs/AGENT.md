@@ -153,20 +153,20 @@ revision reviewed and deployed by `relay-to-intervals`:
 ```bash
 # All supported fields, status-only output, no writes
 uvx --python 3.13 \
-  --from "git+https://github.com/KirillSugonyakin/intervalssync.git@81f49ad5356aa41609214bae34bc682497c14ead" \
+  --from "git+https://github.com/KirillSugonyakin/intervalssync.git@23f96ccbd051257bb0d377700ac150019ac4cad4" \
   intervalssync sync-rider-settings \
   --env-file .env --sport Ride --dry-run --json
 
 # Selected zone groups; show values only for this explicit dry-run
 uvx --python 3.13 \
-  --from "git+https://github.com/KirillSugonyakin/intervalssync.git@81f49ad5356aa41609214bae34bc682497c14ead" \
+  --from "git+https://github.com/KirillSugonyakin/intervalssync.git@23f96ccbd051257bb0d377700ac150019ac4cad4" \
   intervalssync sync-rider-settings \
   --env-file .env --sport Ride \
   --fields hr_zones,power_zones --dry-run --show-values --json
 
 # Apply all supported fields and verify iGPSPORT read-back
 uvx --python 3.13 \
-  --from "git+https://github.com/KirillSugonyakin/intervalssync.git@81f49ad5356aa41609214bae34bc682497c14ead" \
+  --from "git+https://github.com/KirillSugonyakin/intervalssync.git@23f96ccbd051257bb0d377700ac150019ac4cad4" \
   intervalssync sync-rider-settings \
   --env-file .env --sport Ride --json
 ```
