@@ -55,6 +55,9 @@ def test_fetch_calendar_workouts(monkeypatch):
     assert items[0].external_id == "restortrain-plan-100"
     assert items[0].oauth_client_id == "restortrain-client"
     assert items[0].start_date_local == "2026-06-04"
+    # Bryton schedules workouts by date; without this they never reach the
+    # head unit. See build_workout_info().
+    assert items[0].start_date == "2026-06-04"
 
 
 def test_fetch_sport_settings_max_hr(monkeypatch):

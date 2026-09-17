@@ -32,6 +32,7 @@ class CalendarWorkout:
     external_id: str | None = None
     oauth_client_id: str | None = None
     start_date_local: str = ""
+    start_date: str = ""
 
 
 @dataclass(frozen=True)
@@ -171,7 +172,11 @@ def upload_fit_file(
         return None
     activities = data.get("activities") or []
     activity_id = None
-    if isinstance(activities, list) and activities and isinstance(activities[0], dict):
+    if (
+        isinstance(activities, list)
+        and activities
+        and isinstance(activities[0], dict)
+    ):
         activity_id = _parse_activity_id(activities[0].get("id"))
     if activity_id is None:
         activity_id = _parse_activity_id(data.get("id"))
@@ -225,7 +230,9 @@ def fetch_activity_identities(
     return ActivityIdentities(activity_ids, external_ids)
 
 
-def fetch_uploaded_external_ids(api_key: str, oldest: date, newest: date) -> set[str]:
+def fetch_uploaded_external_ids(
+    api_key: str, oldest: date, newest: date
+) -> set[str]:
     """Return external_ids already on intervals.icu in a date range."""
     return set(fetch_activity_identities(api_key, oldest, newest).external_ids)
 
@@ -294,6 +301,7 @@ def fetch_calendar_workouts(
                 start_date_local=str(
                     event.get("start_date_local") or event.get("start_date") or ""
                 )[:10],
+                start_date=str(event.get("start_date_local") or "")[:10],
             )
         )
     return workouts
