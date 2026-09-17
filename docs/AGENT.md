@@ -148,7 +148,9 @@ Success example:
 Use this command when intervals.icu must own the cycling profile values and
 iGPSPORT is only the destination. This command is not in the current upstream
 PyPI release (`v0.9.3`). The examples intentionally execute the immutable fork
-revision reviewed and deployed by `relay-to-intervals`:
+integration revision reviewed for the relay. The public relay
+[Dockerfile](https://github.com/KirillSugonyakin/igpsport-intervals-relay/blob/main/Dockerfile)
+is authoritative for its exact current pin:
 
 ```bash
 # All supported fields, status-only output, no writes

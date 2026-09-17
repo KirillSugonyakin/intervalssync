@@ -117,9 +117,11 @@ uvx --python 3.13 intervalssync@latest sync --json
 ```
 
 The verified `sync-rider-settings` command is currently available in the
-reviewed fork commit used by `relay-to-intervals`; it is not part of the latest
+reviewed fork integration revision shown below; it is not part of the latest
 upstream PyPI release (`v0.9.3`). Until an upstream release includes it, invoke
-that immutable revision explicitly:
+that immutable revision explicitly. See the public relay
+[Dockerfile](https://github.com/KirillSugonyakin/igpsport-intervals-relay/blob/main/Dockerfile)
+for its exact current pin:
 
 ```bash
 uvx --python 3.13 \
