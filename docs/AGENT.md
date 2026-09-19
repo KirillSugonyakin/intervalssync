@@ -186,6 +186,27 @@ Non-secret defaults in `intervalssync-cli` `config.json` (`platformdirs`). Secre
 
 Same as GUI **Upload to iGPSPORT** / **Upload to Bryton** — intervals.icu calendar → custom workouts on the chosen device platform.
 
+For iGPSPORT, the CLI persists a hashed logical identity and normalized export
+fingerprint in `workout_records`. A changed Intervals plan updates the same
+iGPSPORT workout ID. If that remote workout is manually deleted while its plan
+is still inside the configured upload window, the next run recreates the latest
+version. Once a plan is outside the window, a missing remote workout is not
+recreated and its stale mapping is pruned after a complete remote lookup.
+
+Add `[skip-igp]` to the Intervals event name or description to suppress create,
+update, and recreation. The marker also applies with `--force-resync`; removing
+it resumes normal sync. `[ignore-igp]` is ordinary text and is not a synonym.
+
+The Intervals event description takes precedence over the nested workout
+description and is limited to 500 characters. Step classification follows
+explicit warmup, cooldown, rest, recovery, active, and interval metadata. The
+sync does not infer warmup or cooldown from position or power.
+
+The iGPSPORT JSON result includes `uploaded`, `updated`, `recreated`, `skipped`,
+`conflicted`, `failed`, `description_truncated`, `uploaded_map`, and
+`synced_map`. A conflict or incomplete Intervals/iGPSPORT lookup fails closed:
+the command preserves mappings and performs no ambiguous write.
+
 ### Zone sync
 
 Reads FTP, LTHR, max HR, power/HR zones, and weight from intervals.icu and writes them to the iGPSPORT profile (CLI only for now).

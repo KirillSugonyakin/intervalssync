@@ -33,6 +33,9 @@ def test_fetch_calendar_workouts(monkeypatch):
                     "name": "Big Gear",
                     "description": "Strength",
                     "type": "Ride",
+                    "external_id": "restortrain-plan-100",
+                    "oauth_client_id": "restortrain-client",
+                    "start_date_local": "2026-06-04T07:00:00",
                     "workout_doc": {"steps": [{"duration": 120}]},
                 },
                 {
@@ -49,6 +52,9 @@ def test_fetch_calendar_workouts(monkeypatch):
     assert len(items) == 1
     assert items[0].event_id == 100
     assert items[0].name == "Big Gear"
+    assert items[0].external_id == "restortrain-plan-100"
+    assert items[0].oauth_client_id == "restortrain-client"
+    assert items[0].start_date_local == "2026-06-04"
 
 
 def test_fetch_sport_settings_max_hr(monkeypatch):

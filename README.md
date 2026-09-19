@@ -55,10 +55,11 @@
 
 - Syncs recent rides from **iGPSPORT** or **Bryton Active** to **intervals.icu** (original `.fit` files)
 - **Optional Dropbox upload** — mirror activities to a Dropbox folder from the GUI (iGPSPORT or Bryton sync)
-- **Upload workouts** — push planned cycling workouts from your intervals.icu calendar to iGPSPORT custom workouts or Bryton Active (sync to your head unit from the vendor app)
+- **Upload and refresh workouts** — create planned cycling workouts from intervals.icu on iGPSPORT or Bryton Active; iGPSPORT uploads keep a durable identity, update changed plans in place, and recreate a manually deleted workout while it is still in the configured calendar window
 - **Skips activities already uploaded** so re-running is safe — with an optional *force re-sync*
 - Lets you choose how many recent activities to process
 - **Workout upload window** in Settings — how many calendar days to upload (default: today only)
+- Add **`[skip-igp]`** to an Intervals workout name or description to suppress its iGPSPORT create, update, and recreation while the marker remains. Removing it resumes sync. The old text `[ignore-igp]` has no special behavior.
 - **Sets the intervals.icu sport type** after upload (e.g. Mountain Bike Ride / Gravel Ride) — iGPSPORT exports everything as a generic "Ride"
 - Optionally deletes the local `.fit` files after a successful upload
 - Stores your credentials in the **OS secure vault** (Windows Credential Manager / macOS Keychain / Android Keystore), never in a file
