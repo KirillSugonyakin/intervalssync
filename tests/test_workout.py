@@ -10,6 +10,15 @@ from intervalssync import intervals_icu
 from intervalssync.igpsport import workout
 
 
+@pytest.fixture(autouse=True)
+def verified_writes(request, monkeypatch):
+    if request.node.get_closest_marker("real_verification"):
+        return
+    monkeypatch.setattr(
+        workout, "verify_custom_workout", lambda *args, **kwargs: True, raising=False
+    )
+
+
 class FakeResponse:
     def __init__(self, *, status=200, json_data=None):
         self.status_code = status
@@ -45,10 +54,121 @@ def test_icu_workout_doc_maps_simple_ftp_step():
     assert step["type"] == "Step"
     assert step["length"] == {"unit": "Second", "value": 3600}
     assert step["intensityTarget"] == {
-        "unit": "PercentOfFTP",
+        "unit": "PercentOfFtp",
+        "value": 0,
         "minValue": 100,
         "maxValue": 100,
     }
+
+
+def test_icu_workout_doc_maps_cadence_as_native_secondary_target():
+    body = workout.icu_workout_doc_to_igps(
+        "Cadence",
+        "",
+        {
+            "target": "POWER",
+            "steps": [
+                {
+                    "duration": 180,
+                    "power": {"value": 2, "units": "power_zone"},
+                    "_power": {"start": 140, "end": 180},
+                    "cadence": {"start": 85, "end": 95, "units": "rpm"},
+                }
+            ],
+        },
+    )
+
+    assert body is not None
+    step = body["data"]["structure"][0]
+    assert step["intensityTarget"] == {
+        "unit": "PowerCustom",
+        "value": 0,
+        "minValue": 140,
+        "maxValue": 180,
+    }
+    assert step["secondaryIntensityTarget"] == {
+        "unit": "Cadence",
+        "value": 0,
+        "minValue": 85,
+        "maxValue": 95,
+    }
+    assert "cadenceTarget" not in step
+
+
+def test_icu_workout_doc_preserves_leaf_distance_over_estimated_duration():
+    body = workout.icu_workout_doc_to_igps(
+        "Distance",
+        "",
+        {"steps": [{"distance": 800, "duration": 96}]},
+    )
+
+    assert body is not None
+    assert body["data"]["structure"][0]["length"] == {
+        "unit": "Meter",
+        "value": 800,
+    }
+
+
+def test_icu_workout_doc_uses_explicit_hr_target_instead_of_power():
+    body = workout.icu_workout_doc_to_igps(
+        "Heart rate",
+        "",
+        {
+            "target": "HR",
+            "steps": [
+                {
+                    "duration": 120,
+                    "_power": {"start": 150, "end": 170},
+                    "hr": {"value": 2, "units": "hr_zone"},
+                    "_hr": {"start": 130, "end": 145},
+                }
+            ],
+        },
+    )
+
+    assert body is not None
+    assert body["data"]["structure"][0]["intensityTarget"] == {
+        "unit": "HeartRateCustom",
+        "value": 0,
+        "minValue": 130,
+        "maxValue": 145,
+    }
+
+
+def test_icu_workout_doc_rejects_an_explicit_unmapped_secondary_target():
+    with pytest.raises(workout.UnsupportedWorkoutError, match="secondary heart-rate"):
+        workout.icu_workout_doc_to_igps(
+            "Power plus HR",
+            "",
+            {
+                "target": "POWER",
+                "steps": [
+                    {
+                        "duration": 60,
+                        "power": {"value": 90, "units": "%ftp"},
+                        "hr": {"value": 2, "units": "hr_zone"},
+                    }
+                ],
+            },
+        )
+
+
+def test_icu_workout_doc_rejects_ramp_before_any_remote_write():
+    with pytest.raises(workout.UnsupportedWorkoutError, match="ramp"):
+        workout.icu_workout_doc_to_igps(
+            "Ramp",
+            "",
+            {
+                "target": "POWER",
+                "steps": [
+                    {
+                        "duration": 300,
+                        "ramp": True,
+                        "power": {"start": 50, "end": 70, "units": "%ftp"},
+                    }
+                ],
+            },
+        )
 
 
 def test_icu_workout_doc_prefers_resolved_power_watts():
@@ -57,7 +177,6 @@ def test_icu_workout_doc_prefers_resolved_power_watts():
             {
                 "duration": 600,
                 "warmup": True,
-                "ramp": True,
                 "power": {"start": 35, "end": 55, "units": "%ftp"},
                 "_power": {"start": 98, "end": 154},
             }
@@ -171,6 +290,40 @@ def test_upload_custom_workout_returns_none_on_error(monkeypatch):
     )
     session = workout.requests.Session()
     assert workout.upload_custom_workout(session, {}, {}) is None
+
+
+@pytest.mark.real_verification
+def test_verify_custom_workout_compares_secondary_target_and_ignores_ids(monkeypatch):
+    expected = workout.icu_workout_doc_to_igps(
+        "Verified",
+        "",
+        {
+            "target": "POWER",
+            "steps": [
+                {
+                    "duration": 60,
+                    "power": {"value": 90, "units": "%ftp"},
+                    "cadence": {"start": 85, "end": 95, "units": "rpm"},
+                }
+            ],
+        },
+    )
+    assert expected is not None
+    remote_step = dict(expected["data"]["structure"][0], id="step-id", uuid="remote-uuid")
+    remote = {"code": 0, "data": {"title": "Verified", "structure": [remote_step]}}
+    captured = {}
+
+    def fake_get(self, url, **kwargs):
+        captured.update(url=url, params=kwargs["params"])
+        return FakeResponse(json_data=remote)
+
+    monkeypatch.setattr(workout.requests.Session, "get", fake_get)
+
+    assert workout.verify_custom_workout(
+        workout.requests.Session(), {}, 123, expected
+    )
+    assert captured["url"].endswith("/WorkOut/GetWorkOutDetail")
+    assert captured["params"] == {"id": 123}
 
 
 def test_list_custom_workouts(monkeypatch):
@@ -394,6 +547,32 @@ def test_upload_workouts_uploads_new_workout(monkeypatch):
     assert result.uploaded_map == {"7": 555}
 
 
+def test_upload_workouts_keeps_accepted_id_pending_after_verification_failure(
+    monkeypatch,
+):
+    current = _calendar_workout()
+    source_key = workout.source_identity_key(current)
+    _patch_workout_io(monkeypatch, [current], set(), 555)
+    monkeypatch.setattr(workout, "verify_custom_workout", lambda *args, **kwargs: False)
+
+    result = workout.upload_workouts(workout.WorkoutUploadConfig("u", "p", "k"))
+
+    assert result.uploaded == 0
+    assert result.verification_failed == 1
+    assert result.failed == 1
+    assert result.synced_map == {}
+    assert result.workout_records[source_key] == {
+        "event_id": "42",
+        "remote_id": 555,
+        "source_key": source_key,
+        "slot_key": workout.fallback_slot_key(current),
+        "export_fingerprint": None,
+        "start_date_local": "2026-09-10",
+        "verification_version": None,
+        "verification_status": "pending",
+    }
+
+
 def test_upload_workouts_skips_non_cycling_type(monkeypatch):
     monkeypatch.setattr(
         workout, "login", lambda s, u, p, *a, **k: {"Authorization": "Bearer t"}
@@ -419,6 +598,50 @@ def test_upload_workouts_skips_non_cycling_type(monkeypatch):
     )
     assert result.skipped == 1
     assert result.uploaded == 0
+
+
+def test_upload_workouts_blocks_unsupported_workout_and_continues(monkeypatch):
+    blocked = _calendar_workout(
+        event_id=41,
+        name="Unsupported ramp",
+        external_id="restortrain-41",
+        steps=[
+            {
+                "duration": 60,
+                "ramp": True,
+                "power": {"value": 90, "units": "%ftp"},
+            }
+        ],
+    )
+    supported = _calendar_workout(
+        event_id=42,
+        name="Supported",
+        external_id="restortrain-42",
+        start_date_local="2026-09-11",
+        steps=[{"duration": 60}],
+    )
+    blocked_key = workout.source_identity_key(blocked)
+    original = {
+        "event_id": "41",
+        "remote_id": 100,
+        "source_key": blocked_key,
+        "slot_key": workout.fallback_slot_key(blocked),
+        "export_fingerprint": "old",
+        "start_date_local": "2026-09-10",
+    }
+    calls = _patch_workout_io(monkeypatch, [blocked, supported], {100}, 200)
+
+    result = workout.upload_workouts(
+        workout.WorkoutUploadConfig(
+            "u", "p", "k", workout_records={blocked_key: dict(original)}
+        )
+    )
+
+    assert result.unsupported == 1
+    assert result.failed == 1
+    assert result.uploaded == 1
+    assert len(calls) == 1
+    assert result.workout_records[blocked_key] == original
 
 
 def test_upload_workouts_one_day_window_uses_today_only(monkeypatch):
