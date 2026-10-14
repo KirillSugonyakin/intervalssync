@@ -365,6 +365,38 @@ def test_verification_shape_retains_every_observed_primary_target(target):
     assert workout._verification_shape(data) == data
 
 
+@pytest.mark.parametrize(
+    "secondary_target",
+    [
+        {"unit": "Cadence", "value": 0, "minValue": 85, "maxValue": 95},
+        {"unit": "HeartRate", "value": 4},
+        {
+            "unit": "HeartRateCustom",
+            "value": 0,
+            "minValue": 130,
+            "maxValue": 145,
+        },
+        {"unit": "Power", "value": 3},
+    ],
+)
+def test_verification_shape_retains_every_observed_secondary_target(secondary_target):
+    data = {
+        "title": "Native secondary contract",
+        "structure": [
+            {
+                "type": "Step",
+                "intensityClass": "Active",
+                "openDuration": "false",
+                "length": {"unit": "Second", "value": 60},
+                "intensityTarget": {"unit": "Power", "value": 2},
+                "secondaryIntensityTarget": secondary_target,
+            }
+        ],
+    }
+
+    assert workout._verification_shape(data) == data
+
+
 def test_icu_workout_doc_preserves_distance_inside_a_repetition():
     body = workout.icu_workout_doc_to_igps(
         "Repeated distance",
