@@ -355,6 +355,71 @@ def test_verify_custom_workout_compares_secondary_target_and_ignores_ids(monkeyp
     assert captured["params"] == {"id": 123}
 
 
+@pytest.mark.parametrize(
+    "target",
+    [
+        {"unit": "Power", "value": 3},
+        {"unit": "PowerCustom", "value": 0, "minValue": 150, "maxValue": 180},
+        {"unit": "PercentOfFtp", "value": 0, "minValue": 92, "maxValue": 105},
+        {"unit": "HeartRate", "value": 4},
+        {
+            "unit": "HeartRateCustom",
+            "value": 0,
+            "minValue": 130,
+            "maxValue": 145,
+        },
+        {"unit": "Speed", "value": 0, "minValue": 5000, "maxValue": 6944},
+    ],
+)
+def test_verification_shape_retains_every_observed_primary_target(target):
+    data = {
+        "title": "Native contract",
+        "structure": [
+            {
+                "type": "Step",
+                "intensityClass": "Active",
+                "openDuration": "false",
+                "length": {"unit": "Second", "value": 60},
+                "intensityTarget": target,
+                "secondaryIntensityTarget": {
+                    "unit": "Cadence",
+                    "value": 0,
+                    "minValue": 85,
+                    "maxValue": 95,
+                },
+            }
+        ],
+    }
+
+    assert workout._verification_shape(data) == data
+
+
+def test_icu_workout_doc_preserves_distance_inside_a_repetition():
+    body = workout.icu_workout_doc_to_igps(
+        "Repeated distance",
+        "",
+        {
+            "steps": [
+                {
+                    "reps": 2,
+                    "distance": 1600,
+                    "duration": 432,
+                    "steps": [
+                        {"distance": 800, "duration": 96},
+                        {"duration": 120},
+                    ],
+                }
+            ]
+        },
+    )
+
+    assert body is not None
+    repeated = body["data"]["structure"][0]
+    assert repeated["length"] == {"unit": "Repetition", "value": 2}
+    assert repeated["steps"][0]["length"] == {"unit": "Meter", "value": 800}
+    assert repeated["steps"][1]["length"] == {"unit": "Second", "value": 120}
+
+
 def test_list_custom_workouts(monkeypatch):
     captured: dict = {}
 
@@ -600,6 +665,19 @@ def test_upload_workouts_keeps_accepted_id_pending_after_verification_failure(
         "verification_version": None,
         "verification_status": "pending",
     }
+
+
+def test_upload_workouts_aborts_when_pending_id_checkpoint_fails(monkeypatch):
+    current = _calendar_workout()
+    _patch_workout_io(monkeypatch, [current], set(), 555)
+
+    def broken_checkpoint(result):
+        raise OSError("state volume unavailable")
+
+    with pytest.raises(workout.SyncError, match="checkpoint accepted workout ID"):
+        workout.upload_workouts(
+            workout.WorkoutUploadConfig("u", "p", "k", checkpoint=broken_checkpoint)
+        )
 
 
 def test_upload_workouts_skips_non_cycling_type(monkeypatch):
