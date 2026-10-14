@@ -44,6 +44,10 @@ _CYCLING_TYPES = frozenset(
 Progress = Callable[[str], None]
 
 
+class UnsupportedWorkoutError(ValueError):
+    """The source workout has semantics this relay must not silently change."""
+
+
 def _noop(_message: str) -> None:
     pass
 
@@ -58,6 +62,8 @@ class WorkoutUploadResult:
     failed: int = 0
     conflicted: int = 0
     no_steps: int = 0
+    unsupported: int = 0
+    verification_failed: int = 0
     description_truncated: int = 0
     uploaded_map: dict[str, int] = field(default_factory=dict)
     synced_map: dict[str, int] = field(default_factory=dict)
@@ -77,6 +83,7 @@ class WorkoutUploadConfig:
     uploaded_workouts: dict[str, int] = field(default_factory=dict)
     workout_records: dict[str, dict[str, Any]] = field(default_factory=dict)
     force_resync: bool = False
+    checkpoint: Callable[[WorkoutUploadResult], None] | None = None
 
 
 def list_custom_workouts(
@@ -179,6 +186,8 @@ def apply_workout_state(
                 "slot_key": None,
                 "export_fingerprint": None,
                 "start_date_local": "",
+                "verification_version": None,
+                "verification_status": None,
             }
     workout_records.clear()
     workout_records.update(next_records)
@@ -245,7 +254,7 @@ def _valid_record(value: Any) -> dict[str, Any] | None:
         return None
     if remote_id <= 0:
         return None
-    return {
+    record = {
         "event_id": str(value.get("event_id") or ""),
         "remote_id": remote_id,
         "source_key": value.get("source_key") or None,
@@ -253,6 +262,106 @@ def _valid_record(value: Any) -> dict[str, Any] | None:
         "export_fingerprint": value.get("export_fingerprint") or None,
         "start_date_local": str(value.get("start_date_local") or "")[:10],
     }
+    if value.get("verification_version") == 1:
+        record["verification_version"] = 1
+    if value.get("verification_status") in {"verified", "pending"}:
+        record["verification_status"] = value["verification_status"]
+    return record
+
+
+def fetch_custom_workout_detail(
+    session: requests.Session,
+    auth_headers: dict[str, str],
+    workout_id: int,
+    region: IgpRegionConfig | str | None = None,
+) -> dict[str, Any] | None:
+    """Return a single iGPSPORT workout detail, or None for an invalid response."""
+    cfg = resolve_region(region.name if isinstance(region, IgpRegionConfig) else region)
+    response = session.get(
+        f"{cfg.mobile_api_base}/WorkOut/GetWorkOutDetail",
+        params={"id": workout_id},
+        headers=auth_headers,
+        timeout=HTTP_TIMEOUT,
+    )
+    if not response.ok:
+        return None
+    try:
+        payload = response.json()
+    except ValueError:
+        return None
+    data = (
+        payload.get("data")
+        if isinstance(payload, dict) and payload.get("code") == 0
+        else None
+    )
+    return data if isinstance(data, dict) else None
+
+
+def _target_shape(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    return {
+        key: value[key]
+        for key in ("unit", "value", "minValue", "maxValue")
+        if key in value
+    }
+
+
+def _structure_shape(value: Any) -> list[dict[str, Any]] | None:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return None
+    if not isinstance(value, list):
+        return None
+    result: list[dict[str, Any]] = []
+    for step in value:
+        if not isinstance(step, dict):
+            return None
+        shape = {
+            key: step[key]
+            for key in ("type", "intensityClass", "openDuration", "length")
+            if key in step
+        }
+        for key in ("intensityTarget", "secondaryIntensityTarget"):
+            if key in step:
+                target = _target_shape(step[key])
+                if target is None:
+                    return None
+                shape[key] = target
+        if "steps" in step:
+            nested = _structure_shape(step["steps"])
+            if nested is None:
+                return None
+            shape["steps"] = nested
+        result.append(shape)
+    return result
+
+
+def _verification_shape(data: Any) -> dict[str, Any] | None:
+    if not isinstance(data, dict):
+        return None
+    structure = _structure_shape(data.get("structure"))
+    if structure is None:
+        return None
+    return {"title": data.get("title"), "structure": structure}
+
+
+def verify_custom_workout(
+    session: requests.Session,
+    auth_headers: dict[str, str],
+    workout_id: int,
+    expected_body: dict[str, Any],
+    region: IgpRegionConfig | str | None = None,
+) -> bool:
+    """Read back and compare executable workout semantics after a write."""
+    remote = fetch_custom_workout_detail(
+        session, auth_headers, workout_id, region=region
+    )
+    expected = _verification_shape(expected_body.get("data"))
+    actual = _verification_shape(remote)
+    return expected is not None and expected == actual
 
 
 def upload_custom_workout(
@@ -306,6 +415,14 @@ def _num(value: Any) -> float | None:
         return None
 
 
+def _integer(value: Any, *, field: str, positive: bool = False) -> int:
+    number = _num(value)
+    if number is None or not number.is_integer() or (positive and number <= 0):
+        qualifier = "a positive whole number" if positive else "a whole number"
+        raise UnsupportedWorkoutError(f"{field} must be {qualifier}")
+    return int(number)
+
+
 def _map_power_target(step: dict[str, Any]) -> dict[str, Any] | None:
     resolved = step.get("_power")
     if isinstance(resolved, dict):
@@ -346,10 +463,13 @@ def _map_power_target(step: dict[str, Any]) -> dict[str, Any] | None:
 
     if units == "%ftp":
         return {
-            "unit": "PercentOfFTP",
+            "unit": "PercentOfFtp",
+            "value": 0,
             "minValue": min_v,
             "maxValue": max_v,
         }
+    if units not in {"w", "watt", "watts"}:
+        raise UnsupportedWorkoutError(f"unsupported power units: {units or 'missing'}")
     return {
         "unit": "PowerCustom",
         "value": 0,
@@ -369,6 +489,7 @@ def _map_hr_target(step: dict[str, Any]) -> dict[str, Any] | None:
         if min_v is not None and max_v is not None:
             return {
                 "unit": "HeartRateCustom",
+                "value": 0,
                 "minValue": int(min_v),
                 "maxValue": int(max_v),
             }
@@ -377,6 +498,7 @@ def _map_hr_target(step: dict[str, Any]) -> dict[str, Any] | None:
                 return {"unit": "HeartRate", "value": int(value)}
             return {
                 "unit": "HeartRateCustom",
+                "value": 0,
                 "minValue": int(value),
                 "maxValue": int(value),
             }
@@ -384,12 +506,22 @@ def _map_hr_target(step: dict[str, Any]) -> dict[str, Any] | None:
     hr = step.get("hr")
     if not isinstance(hr, dict):
         return None
+    units = str(hr.get("units") or "").lower()
     value = _num(hr.get("value"))
     start = _num(hr.get("start"))
     end = _num(hr.get("end"))
+    if units == "hr_zone":
+        if value is None or value != int(value) or not 1 <= value <= 5:
+            raise UnsupportedWorkoutError("heart-rate zone must be an integer from 1 to 5")
+        return {"unit": "HeartRate", "value": int(value)}
+    if units not in {"bpm", "heart_rate"}:
+        raise UnsupportedWorkoutError(
+            f"unsupported heart-rate units: {units or 'missing'}"
+        )
     if start is not None and end is not None:
         return {
             "unit": "HeartRateCustom",
+            "value": 0,
             "minValue": int(start),
             "maxValue": int(end),
         }
@@ -398,6 +530,7 @@ def _map_hr_target(step: dict[str, Any]) -> dict[str, Any] | None:
             return {"unit": "HeartRate", "value": int(value)}
         return {
             "unit": "HeartRateCustom",
+            "value": 0,
             "minValue": int(value),
             "maxValue": int(value),
         }
@@ -408,6 +541,9 @@ def _map_cadence_target(step: dict[str, Any]) -> dict[str, Any] | None:
     cadence = step.get("cadence")
     if not isinstance(cadence, dict):
         return None
+    units = str(cadence.get("units") or "").lower()
+    if units not in {"rpm", ""}:
+        raise UnsupportedWorkoutError(f"unsupported cadence units: {units}")
     value = _num(cadence.get("value"))
     start = _num(cadence.get("start"))
     end = _num(cadence.get("end"))
@@ -417,10 +553,74 @@ def _map_cadence_target(step: dict[str, Any]) -> dict[str, Any] | None:
         return None
     min_v = int(min_v if min_v is not None else max_v)
     max_v = int(max_v if max_v is not None else min_v)
-    return {"unit": "Cadence", "minValue": min_v, "maxValue": max_v}
+    return {
+        "unit": "Cadence",
+        "value": 0,
+        "minValue": min_v,
+        "maxValue": max_v,
+    }
 
 
-def _map_icu_step(step: dict[str, Any], index: int) -> dict[str, Any] | None:
+def _workout_target(workout_doc: dict[str, Any]) -> str:
+    raw_target = workout_doc.get("target")
+    if raw_target is None or str(raw_target).strip() == "":
+        return "AUTO"
+    target = str(raw_target).upper()
+    if target in {"AUTO", "POWER", "HR"}:
+        return target
+    raise UnsupportedWorkoutError(f"unsupported workout target: {target}")
+
+
+def _primary_target(step: dict[str, Any], target: str) -> dict[str, Any] | None:
+    if target == "POWER":
+        return _map_power_target(step)
+    if target == "HR":
+        return _map_hr_target(step)
+
+    has_power = isinstance(step.get("power"), dict) or isinstance(
+        step.get("_power"), dict
+    )
+    has_hr = isinstance(step.get("hr"), dict) or isinstance(step.get("_hr"), dict)
+    if has_power and has_hr:
+        raise UnsupportedWorkoutError("ambiguous automatic power and heart-rate targets")
+    if has_power:
+        return _map_power_target(step)
+    if has_hr:
+        return _map_hr_target(step)
+    return None
+
+
+def _assert_supported_step(step: dict[str, Any], target: str) -> None:
+    for field in ("ramp", "freeride", "maxeffort"):
+        if step.get(field):
+            raise UnsupportedWorkoutError(f"unsupported step feature: {field}")
+    if isinstance(step.get("pace"), dict):
+        raise UnsupportedWorkoutError("pace targets are not supported")
+    if step.get("calories") is not None or step.get("calorie") is not None:
+        raise UnsupportedWorkoutError("calorie duration is not supported")
+    if target == "POWER" and isinstance(step.get("hr"), dict):
+        raise UnsupportedWorkoutError("secondary heart-rate targets are not supported")
+    if target == "HR" and isinstance(step.get("power"), dict):
+        raise UnsupportedWorkoutError("secondary power targets are not supported")
+    if isinstance(step.get("secondary_hr"), dict):
+        raise UnsupportedWorkoutError("secondary heart-rate targets are not supported")
+
+
+def _step_length(step: dict[str, Any]) -> dict[str, Any]:
+    if step.get("distance") is not None:
+        return {
+            "unit": "Meter",
+            "value": _integer(step["distance"], field="distance", positive=True),
+        }
+    if step.get("duration") is None:
+        raise UnsupportedWorkoutError("step has neither duration nor distance")
+    return {
+        "unit": "Second",
+        "value": _integer(step["duration"], field="duration", positive=True),
+    }
+
+
+def _map_icu_step(step: dict[str, Any], index: int, target: str) -> dict[str, Any] | None:
     reps = step.get("reps")
     nested = step.get("steps")
     if reps and isinstance(nested, list) and nested:
@@ -428,7 +628,7 @@ def _map_icu_step(step: dict[str, Any], index: int) -> dict[str, Any] | None:
         for i, child in enumerate(nested, start=1):
             if not isinstance(child, dict):
                 continue
-            mapped = _map_icu_step(child, i)
+            mapped = _map_icu_step(child, i, target)
             if mapped is not None:
                 child_steps.append(mapped)
         if not child_steps:
@@ -443,6 +643,7 @@ def _map_icu_step(step: dict[str, Any], index: int) -> dict[str, Any] | None:
             "steps": child_steps,
         }
 
+    _assert_supported_step(step, target)
     open_duration = bool(step.get("until_lap_press"))
     igp_step: dict[str, Any] = {
         "type": "Step",
@@ -453,22 +654,17 @@ def _map_icu_step(step: dict[str, Any], index: int) -> dict[str, Any] | None:
     }
 
     if not open_duration:
-        duration = step.get("duration")
-        if duration is None:
-            return None
-        igp_step["length"] = {"unit": "Second", "value": int(duration)}
+        igp_step["length"] = _step_length(step)
 
-    power_target = _map_power_target(step)
-    if power_target:
-        igp_step["intensityTarget"] = power_target
-    else:
-        hr_target = _map_hr_target(step)
-        if hr_target:
-            igp_step["intensityTarget"] = hr_target
+    primary_target = _primary_target(step, target)
+    if primary_target:
+        igp_step["intensityTarget"] = primary_target
 
     cadence_target = _map_cadence_target(step)
     if cadence_target:
-        igp_step["cadenceTarget"] = cadence_target
+        if primary_target is None:
+            raise UnsupportedWorkoutError("cadence requires a supported primary target")
+        igp_step["secondaryIntensityTarget"] = cadence_target
 
     return igp_step
 
@@ -510,11 +706,12 @@ def icu_workout_doc_to_igps(
     if not isinstance(raw_steps, list) or not raw_steps:
         return None
 
+    target = _workout_target(workout_doc)
     structure: list[dict[str, Any]] = []
     for i, step in enumerate(raw_steps, start=1):
         if not isinstance(step, dict):
             continue
-        mapped = _map_icu_step(step, i)
+        mapped = _map_icu_step(step, i, target)
         if mapped is not None:
             structure.append(mapped)
 
@@ -609,6 +806,8 @@ def upload_workouts(
             "slot_key": fallback_slot_key(current) if current else None,
             "export_fingerprint": None,
             "start_date_local": current.start_date_local[:10] if current else "",
+            "verification_version": None,
+            "verification_status": None,
         }
 
     slot_counts: dict[str, int] = {}
@@ -678,12 +877,20 @@ def upload_workouts(
             continue
 
         update_id = stored_id if on_igpsport else None
-        body = icu_workout_doc_to_igps(
-            workout.name,
-            workout.description,
-            workout.workout_doc,
-            existing_workout_id=update_id,
-        )
+        try:
+            body = icu_workout_doc_to_igps(
+                workout.name,
+                workout.description,
+                workout.workout_doc,
+                existing_workout_id=update_id,
+            )
+        except UnsupportedWorkoutError as exc:
+            report(f"⚠ Skipping {workout.name} — unsupported workout: {exc}.")
+            result.unsupported += 1
+            result.failed += 1
+            if old_key:
+                matched_record_keys.add(old_key)
+            continue
         if body is None:
             report(
                 f"⚠ Skipping {workout.name} — no structured steps "
@@ -700,16 +907,33 @@ def upload_workouts(
         fingerprint = export_fingerprint(body)
 
         event_rebound = bool(old_record and old_record["event_id"] != event_key)
-        unchanged = bool(
+        unchanged_candidate = bool(
             on_igpsport
             and old_record
             and old_record.get("export_fingerprint") == fingerprint
             and not event_rebound
             and not config.force_resync
         )
-        if unchanged:
+        if unchanged_candidate and old_record.get("verification_version") == 1:
             report(f"↷ Skipping {workout.name} — export is unchanged.")
             result.skipped += 1
+            if old_key:
+                matched_record_keys.add(old_key)
+            continue
+        if unchanged_candidate:
+            if verify_custom_workout(
+                session, auth_headers, stored_id, body, region=region
+            ):
+                old_record["verification_version"] = 1
+                old_record["verification_status"] = "verified"
+                result.synced_map[event_key] = stored_id
+                result.skipped += 1
+                if old_key:
+                    matched_record_keys.add(old_key)
+                continue
+            report(f"✗ Could not verify legacy export for {workout.name}.")
+            result.verification_failed += 1
+            result.failed += 1
             if old_key:
                 matched_record_keys.add(old_key)
             continue
@@ -735,14 +959,6 @@ def upload_workouts(
                 matched_record_keys.add(old_key)
             continue
 
-        if action == "update":
-            result.updated += 1
-        elif action == "recreate":
-            result.recreated += 1
-        else:
-            result.uploaded += 1
-            result.uploaded_map[event_key] = workout_id
-        result.synced_map[event_key] = workout_id
         live_ids.add(workout_id)
 
         new_key = source_key or f"event:{event_key}"
@@ -753,9 +969,37 @@ def upload_workouts(
             "remote_id": workout_id,
             "source_key": source_key,
             "slot_key": slot_key,
-            "export_fingerprint": fingerprint,
+            "export_fingerprint": None,
             "start_date_local": workout.start_date_local[:10],
+            "verification_version": None,
+            "verification_status": "pending",
         }
+        result.workout_records = records
+        if config.checkpoint:
+            try:
+                config.checkpoint(result)
+            except Exception as exc:  # noqa: BLE001
+                raise SyncError("Could not checkpoint accepted workout ID") from exc
+        if not verify_custom_workout(
+            session, auth_headers, workout_id, body, region=region
+        ):
+            report(f"✗ Could not verify iGPSPORT export for {workout.name}.")
+            result.verification_failed += 1
+            result.failed += 1
+            matched_record_keys.add(new_key)
+            continue
+
+        records[new_key]["export_fingerprint"] = fingerprint
+        records[new_key]["verification_version"] = 1
+        records[new_key]["verification_status"] = "verified"
+        if action == "update":
+            result.updated += 1
+        elif action == "recreate":
+            result.recreated += 1
+        else:
+            result.uploaded += 1
+            result.uploaded_map[event_key] = workout_id
+        result.synced_map[event_key] = workout_id
         matched_record_keys.add(new_key)
 
     # A complete list is authoritative. Missing mappings outside the active
