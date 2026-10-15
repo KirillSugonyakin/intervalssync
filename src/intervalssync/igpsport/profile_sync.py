@@ -262,7 +262,6 @@ def build_rider_settings_plan(
     member = interval_body.get("member")
     if not isinstance(member, dict):
         raise SyncError("iGPSPORT profile payload has no member block")
-    personal_payload = build_personal_user_info_payload_updates(current_user, {})
     statuses: dict[str, str] = {}
     models: dict[str, str] = {}
     source_values: dict[str, Any] = {}
@@ -423,8 +422,10 @@ def build_rider_settings_plan(
             current_values=current_values,
             desired_values=desired_values,
         )
-    personal_payload = build_personal_user_info_payload_updates(
-        current_user, personal_updates
+    personal_payload = (
+        build_personal_user_info_payload_updates(current_user, personal_updates)
+        if _PERSONAL_FIELDS.intersection(selection.effective)
+        else {}
     )
 
     interval_effective = [

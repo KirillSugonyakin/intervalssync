@@ -223,6 +223,8 @@ def map_strict_hr_zones(
     igpsport_zones: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     """Map only recognized HR models without inventing zone boundaries."""
+    if not isinstance(igpsport_zones, list) or not all(isinstance(row, dict) for row in igpsport_zones):
+        raise ValueError("iGPSPORT HR zones must be a list of objects")
     if scheme.model is ZoneModel.FRIEL_7:
         if len(igpsport_zones) != 5 or len(scheme.upper_bounds) != 7:
             raise ValueError("unsupported HR zone mapping")
@@ -247,6 +249,8 @@ def map_strict_power_zones(
     igpsport_zones: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     """Map recognized Coggan zones while preserving the destination open cap."""
+    if not isinstance(igpsport_zones, list) or not all(isinstance(row, dict) for row in igpsport_zones):
+        raise ValueError("iGPSPORT power zones must be a list of objects")
     if scheme.model is not ZoneModel.COGGAN_7:
         raise ValueError("unsupported power zone model")
     if len(scheme.upper_bounds) != 7 or len(igpsport_zones) not in {5, 7}:
@@ -270,6 +274,8 @@ def map_strict_power_zones(
     ]
     if cap_value <= ends[-1]:
         raise ValueError("iGPSPORT power terminal cap must exceed finite boundaries")
+    if not all(left < right for left, right in zip(ends, ends[1:])):
+        raise ValueError("power zone boundaries must be strictly increasing")
     return _apply_end_values([*ends, cap_value], igpsport_zones)
 
 

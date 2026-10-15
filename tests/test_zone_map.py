@@ -22,6 +22,28 @@ from intervalssync.igpsport.zone_map import (
 )
 
 
+@pytest.mark.parametrize("metric", ["hr", "power"])
+def test_strict_adapters_reject_malformed_destination_rows(metric):
+    from intervalssync.igpsport.zone_map import ZoneScheme
+    if metric == "hr":
+        scheme = ZoneScheme("hr", "custom", ZoneModel.DIRECT_5, (), (120, 140, 160, 180, 195), 195)
+        mapper = lambda rows: map_strict_hr_zones(scheme, max_hr=195, igpsport_zones=rows)
+    else:
+        scheme = ZoneScheme("power", "ftp", ZoneModel.COGGAN_7, (), (55, 75, 90, 105, 120, 150, 999), 200)
+        mapper = lambda rows: map_strict_power_zones(scheme, igpsport_zones=rows)
+    rows = [{"start": 0, "end": 2500} for _ in range(5)]
+    rows[1] = None
+    with pytest.raises(ValueError):
+        mapper(rows)
+
+
+def test_strict_power_rejects_boundaries_collapsed_by_rounding():
+    from intervalssync.igpsport.zone_map import ZoneScheme
+    scheme = ZoneScheme("power", "ftp", ZoneModel.COGGAN_7, (), (55, 55.1, 55.2, 55.3, 55.4, 150, 999), 200)
+    with pytest.raises(ValueError):
+        map_strict_power_zones(scheme, igpsport_zones=[{"start": 0, "end": 2500} for _ in range(7)])
+
+
 def _template_zones(count: int) -> list[dict]:
     return [{"id": index, "start": 0, "end": 0} for index in range(count)]
 

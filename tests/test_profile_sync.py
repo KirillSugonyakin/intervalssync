@@ -121,6 +121,42 @@ def _rider_user_destination() -> dict:
     }
 
 
+@pytest.mark.parametrize("metric", ["hr_zones", "power_zones"])
+def test_malformed_destination_zones_block_interval_group(metric):
+    sport, athlete = _rider_source()
+    destination = _rider_interval_destination()
+    table = "power" if metric == "power_zones" else "heartRateLactateThreshold"
+    destination[table][1] = None
+    plan = build_rider_settings_plan(
+        sport, athlete, destination, _rider_user_destination(), parse_rider_fields(metric)
+    )
+    assert plan.interval_changed_fields == ()
+    assert plan.field_statuses[metric] == "invalid"
+
+
+def test_rounded_power_collision_blocks_interval_group():
+    sport, athlete = _rider_source()
+    from dataclasses import replace
+    sport = replace(sport, ftp=200, power_zones=[55, 55.1, 55.2, 55.3, 55.4, 150, 999])
+    plan = build_rider_settings_plan(
+        sport, athlete, _rider_interval_destination(), _rider_user_destination(),
+        parse_rider_fields("power_zones"),
+    )
+    assert plan.interval_changed_fields == ()
+    assert plan.field_statuses["power_zones"] == "invalid"
+
+
+def test_interval_only_plan_does_not_parse_unselected_personal_values():
+    sport, athlete = _rider_source()
+    user = _rider_user_destination()
+    user["gender"] = "malformed"
+    plan = build_rider_settings_plan(
+        sport, athlete, _rider_interval_destination(), user, parse_rider_fields("ftp")
+    )
+    assert plan.interval_changed_fields == ("ftp",)
+    assert plan.personal_changed_fields == ()
+
+
 def test_parse_rider_fields_defaults_to_all_and_expands_dependencies():
     all_fields = parse_rider_fields(None)
     selected = parse_rider_fields("hr_zones,power_zones")
