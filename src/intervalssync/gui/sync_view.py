@@ -307,13 +307,15 @@ def build_sync_view(
         uploaded_count = 0
         try:
             result = upload_workouts(upload_config, progress=append_log)
-            if result.uploaded_map or result.pruned_keys:
+            if result.synced_map or result.uploaded_map or result.pruned_keys:
                 apply_uploaded_workout_map(config.uploaded_workouts, result)
                 config_module.save(config)
-            uploaded_count = result.uploaded
+            uploaded_count = result.uploaded + result.recreated
             append_log(
                 f"\nDone — uploaded {result.uploaded}, "
+                f"updated {result.updated}, recreated {result.recreated}, "
                 f"skipped {result.skipped}, no steps {result.no_steps}, "
+                f"conflicted {result.conflicted}, "
                 f"failed {result.failed}."
             )
         except SyncError as exc:

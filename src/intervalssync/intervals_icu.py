@@ -28,6 +28,9 @@ class CalendarWorkout:
     activity_type: str
     workout_doc: dict[str, Any]
     start_date: str = ""
+    external_id: str | None = None
+    oauth_client_id: str | None = None
+    start_date_local: str = ""
 
 
 @dataclass(frozen=True)
@@ -206,7 +209,12 @@ def fetch_calendar_workouts(
     )
     resp.raise_for_status()
     workouts: list[CalendarWorkout] = []
-    for event in resp.json():
+    events = resp.json()
+    if not isinstance(events, list):
+        raise ValueError("intervals.icu calendar response must be a list")
+    for event in events:
+        if not isinstance(event, dict):
+            raise ValueError("intervals.icu calendar contains an invalid event")
         if event.get("category") != "WORKOUT":
             continue
         workout_doc = event.get("workout_doc")
@@ -219,6 +227,17 @@ def fetch_calendar_workouts(
                 description=str(event.get("description") or ""),
                 activity_type=str(event.get("type") or "Ride"),
                 workout_doc=workout_doc,
+                external_id=(
+                    str(event["external_id"]) if event.get("external_id") else None
+                ),
+                oauth_client_id=(
+                    str(event["oauth_client_id"])
+                    if event.get("oauth_client_id")
+                    else None
+                ),
+                start_date_local=str(
+                    event.get("start_date_local") or event.get("start_date") or ""
+                )[:10],
                 start_date=str(event.get("start_date_local") or "")[:10],
             )
         )

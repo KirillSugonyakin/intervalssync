@@ -186,6 +186,8 @@ Non-secret defaults in `intervalssync-cli` `config.json` (`platformdirs`). Secre
 
 Same as GUI **Upload to iGPSPORT** / **Upload to Bryton** — intervals.icu calendar → custom workouts on the chosen device platform.
 
+
+
 ### Zone sync
 
 Reads FTP, LTHR, max HR, power/HR zones, and weight from intervals.icu and writes them to the iGPSPORT profile (CLI only for now).

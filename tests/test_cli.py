@@ -311,14 +311,35 @@ def test_upload_workouts_json_success(tmp_path: Path, monkeypatch, capsys):
         return workout.WorkoutUploadResult(
             listed=2,
             uploaded=1,
+            updated=2,
+            recreated=1,
             skipped=1,
+            description_truncated=1,
             uploaded_map={"42": 100},
+            synced_map={"42": 100},
+            workout_records={
+                "record": {
+                    "event_id": "42",
+                    "remote_id": 100,
+                    "source_key": "record",
+                    "slot_key": "slot",
+                    "export_fingerprint": "fingerprint",
+                    "start_date_local": "2026-09-10",
+                }
+            },
         )
 
     monkeypatch.setattr(cli, "upload_workouts", fake_upload)
 
     args = cli._build_parser().parse_args(
-        ["upload-workouts", "--env-file", str(env_file), "--json", "--workout-days-ahead", "2"]
+        [
+            "upload-workouts",
+            "--env-file",
+            str(env_file),
+            "--json",
+            "--workout-days-ahead",
+            "2",
+        ]
     )
     assert cli.cmd_upload_workouts(args) == cli.EXIT_OK
 
@@ -328,11 +349,17 @@ def test_upload_workouts_json_success(tmp_path: Path, monkeypatch, capsys):
     assert payload["ok"] is True
     assert payload["source"] == "igpsport"
     assert payload["uploaded"] == 1
+    assert payload["updated"] == 2
+    assert payload["recreated"] == 1
     assert payload["skipped"] == 1
+    assert payload["conflicted"] == 0
+    assert payload["description_truncated"] == 1
+    assert payload["synced_map"] == {"42": 100}
     assert payload["no_steps"] == 0
 
     loaded = cli_config.load()
     assert loaded.uploaded_workouts == {"42": 100}
+    assert loaded.workout_records["record"]["export_fingerprint"] == "fingerprint"
     assert loaded.workout_days_ahead == 1
 
 
