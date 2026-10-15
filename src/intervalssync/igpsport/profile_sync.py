@@ -28,15 +28,7 @@ from .interval_info import (
     update_user_weight,
     zone_range_summary,
 )
-from .zone_map import (
-    ZoneModel,
-    detect_hr_zone_scheme,
-    detect_power_zone_scheme,
-    map_hr_zones,
-    map_power_zones,
-    map_strict_hr_zones,
-    map_strict_power_zones,
-)
+from .zone_map import map_hr_zones, map_power_zones
 
 Progress = Callable[[str], None]
 
@@ -106,7 +98,6 @@ class RiderSettingsPlan:
     interval_body: dict[str, Any]
     personal_payload: dict[str, Any]
     field_statuses: dict[str, str]
-    zone_models: dict[str, str]
     interval_changed_fields: tuple[str, ...]
     personal_changed_fields: tuple[str, ...]
     source_values: dict[str, Any]
@@ -131,7 +122,6 @@ class RiderSettingsSyncResult:
     requested_fields: tuple[str, ...]
     effective_fields: tuple[str, ...]
     field_statuses: dict[str, str]
-    zone_models: dict[str, str]
     selected: int
     updated: int
     verified: int
@@ -263,7 +253,6 @@ def build_rider_settings_plan(
     if not isinstance(member, dict):
         raise SyncError("iGPSPORT profile payload has no member block")
     statuses: dict[str, str] = {}
-    models: dict[str, str] = {}
     source_values: dict[str, Any] = {}
     current_values: dict[str, Any] = {}
     desired_values: dict[str, Any] = {}
@@ -293,103 +282,54 @@ def build_rider_settings_plan(
             statuses[field_name] = "source_missing"
             continue
         current = _interval_value(current_interval, field_name)
-        member[interval_member_keys[field_name]] = source
+        desired = int(round(source))
+        member[interval_member_keys[field_name]] = desired
         _set_status(
             field_name,
             source,
             current,
-            source,
+            desired,
             statuses=statuses,
             source_values=source_values,
             current_values=current_values,
             desired_values=desired_values,
         )
 
-    if "power_zones" in selection.effective:
-        source_values["power_zones"] = list(sport.power_zones)
-        current_values["power_zones"] = _interval_value(
-            current_interval, "power_zones"
+    # Zone labels are descriptive only. Reuse exactly the legacy conversions,
+    # including their rounding, fixed power cap, and maximum-HR table/mode.
+    for field_name, source, threshold, table_key, mapper, dependencies in (
+        ("power_zones", sport.power_zones, sport.ftp, "power", map_power_zones,
+         {"ftp", "power_zones"}),
+        ("hr_zones", sport.hr_zones, sport.max_hr, "heartRate", map_hr_zones,
+         {"max_hr", "hr_zones"}),
+    ):
+        if field_name not in selection.effective:
+            continue
+        source_values[field_name] = list(source)
+        current_values[field_name] = _interval_value(current_interval, field_name)
+        if dependencies & set(sport.invalid_fields):
+            statuses[field_name] = "invalid"
+            continue
+        if threshold is None or not source:
+            statuses[field_name] = "source_missing"
+            continue
+        rows = current_interval.get(table_key)
+        if not isinstance(rows, list) or not rows or not all(isinstance(row, dict) for row in rows):
+            statuses[field_name] = "invalid"
+            continue
+        try:
+            interval_body[table_key] = mapper(source, float(int(round(threshold))), rows)
+        except (ValueError, TypeError, OverflowError):
+            statuses[field_name] = "invalid"
+            continue
+        desired = _zone_shape(interval_body[table_key])
+        if field_name == "hr_zones":
+            member["heartRateComputeMode"] = HEART_RATE_COMPUTE_MODE_MAX_HR
+            desired = (HEART_RATE_COMPUTE_MODE_MAX_HR, desired)
+        desired_values[field_name] = desired
+        statuses[field_name] = (
+            "unchanged" if current_values[field_name] == desired else "would_update"
         )
-        power_invalid = bool(
-            {"ftp", "power_zones", "power_zone_names"} & set(sport.invalid_fields)
-        )
-        if power_invalid:
-            statuses["power_zones"] = "invalid"
-        elif sport.ftp is None or not sport.power_zones or not sport.power_zone_names:
-            statuses["power_zones"] = "source_missing"
-        else:
-            scheme = detect_power_zone_scheme(
-                sport.power_zone_names,
-                sport.power_zones,
-                ftp=sport.ftp,
-            )
-            models["power_zones"] = str(scheme.model)
-            if scheme.model is ZoneModel.UNKNOWN:
-                statuses["power_zones"] = "invalid"
-            else:
-                try:
-                    interval_body["power"] = map_strict_power_zones(
-                        scheme,
-                        igpsport_zones=current_interval.get("power") or [],
-                    )
-                except ValueError:
-                    statuses["power_zones"] = "invalid"
-                else:
-                    desired = _zone_shape(interval_body["power"])
-                    desired_values["power_zones"] = desired
-                    statuses["power_zones"] = (
-                        "unchanged"
-                        if current_values["power_zones"] == desired
-                        else "would_update"
-                    )
-
-    if "hr_zones" in selection.effective:
-        source_values["hr_zones"] = list(sport.hr_zones)
-        current_values["hr_zones"] = _interval_value(current_interval, "hr_zones")
-        hr_invalid = bool(
-            {"max_hr", "hr_zones", "hr_zone_names"}
-            & set(sport.invalid_fields)
-        )
-        if hr_invalid:
-            statuses["hr_zones"] = "invalid"
-        elif (
-            sport.max_hr is None
-            or not sport.hr_zones
-            or not sport.hr_zone_names
-        ):
-            statuses["hr_zones"] = "source_missing"
-        else:
-            scheme = detect_hr_zone_scheme(
-                sport.hr_zone_names,
-                sport.hr_zones,
-                lthr=sport.lthr,
-                max_hr=sport.max_hr,
-            )
-            models["hr_zones"] = str(scheme.model)
-            if scheme.model is ZoneModel.UNKNOWN:
-                statuses["hr_zones"] = "invalid"
-            else:
-                mode = member.get("heartRateComputeMode")
-                if scheme.model is ZoneModel.FRIEL_7:
-                    mode = HEART_RATE_COMPUTE_MODE_LTHR
-                table_key = _hr_table_for_mode(mode)
-                try:
-                    interval_body[table_key] = map_strict_hr_zones(
-                        scheme,
-                        max_hr=sport.max_hr,
-                        igpsport_zones=current_interval.get(table_key) or [],
-                    )
-                except ValueError:
-                    statuses["hr_zones"] = "invalid"
-                else:
-                    member["heartRateComputeMode"] = mode
-                    desired = (mode, _zone_shape(interval_body[table_key]))
-                    desired_values["hr_zones"] = desired
-                    statuses["hr_zones"] = (
-                        "unchanged"
-                        if current_values["hr_zones"] == desired
-                        else "would_update"
-                    )
 
     personal_sources = {
         "weight": (
@@ -468,7 +408,6 @@ def build_rider_settings_plan(
         interval_body=interval_body,
         personal_payload=personal_payload,
         field_statuses=statuses,
-        zone_models=models,
         interval_changed_fields=interval_changed,
         personal_changed_fields=personal_changed,
         source_values=source_values,
@@ -519,7 +458,6 @@ def _rider_result(
         requested_fields=plan.selection.requested,
         effective_fields=plan.selection.effective,
         field_statuses=dict(statuses),
-        zone_models=dict(plan.zone_models),
         selected=len(plan.selection.effective),
         updated=updated,
         verified=sum(status == "verified" for status in statuses.values()),

@@ -506,7 +506,6 @@ def _fake_rider_result():
             "lthr": "unchanged",
             "hr_zones": "verified",
         },
-        zone_models={"hr_zones": "friel_7"},
         selected=3,
         updated=1,
         verified=1,
@@ -585,8 +584,6 @@ def test_sync_rider_settings_json_is_status_only_by_default(
     assert cli.cmd_sync_rider_settings(args) == cli.EXIT_OK
     payload = json.loads(capsys.readouterr().out)
     assert payload["field_statuses"]["hr_zones"] == "verified"
-    assert payload["zone_models"] == {"hr_zones": "friel_7"}
-    assert payload["zone_adapter_version"] == 1
     assert "source_values" not in payload
     assert "current_values" not in payload
     assert "desired_values" not in payload

@@ -172,19 +172,21 @@ pass a blank value, to select all fields. `power_zones` automatically includes
 or unknown field names are configuration errors. Only cycling `Ride` is
 supported; other sports are intentionally reserved for later generic support.
 
-The strict adapter recognizes a direct five-zone HR scheme, Friel seven-zone HR,
-and Coggan seven-zone power. Friel HR maps zones 1–4 directly and combines the
-upper zones into iGPSPORT zone 5 in LTHR mode. Coggan power retains seven slots,
-uses FTP percentages with half-up rounding, and preserves the destination's
-terminal cap. Unknown or malformed schemes fail closed instead of interpolating.
+The selective command reuses the existing `sync-zones` power/HR conversion,
+threshold rounding, terminal-cap behavior, and maximum-HR mode/table for selected
+HR-zone synchronization. Names are optional: custom or translated labels do not
+block valid configured boundaries. Unselected tables and HR mode remain unchanged
+when HR zones are not synchronized. Malformed numeric input blocks its write group.
 
 Synthetic conversion example: with Friel HR upper bounds
 `[120,145,165,175,185,190,195]` and maximum HR `195`, iGPSPORT receives five
 ends `[120,145,165,175,195]`; the three upper Friel bands become one fifth band.
 With FTP `250`, Coggan percentages `[55,75,90,105,120,150,999]`, and a fetched
 destination cap of `2500`, iGPSPORT receives
-`[138,188,225,263,300,375,2500]`. Positive half-watts round upward, the `999`
-open marker is never multiplied by FTP, and the existing terminal cap is kept.
+`[138,188,225,262,300,375,2500]`. Legacy ties-to-even rounding applies, the `999`
+open marker is replaced by the legacy fixed power cap of `2500`. The usual
+destination shapes are seven power slots and five HR slots. Five-slot power
+examples in the research note are explicitly synthetic, not observed live shapes.
 
 Missing Intervals values never clear iGPSPORT fields. Writes are grouped by the
 iGPSPORT interval and personal-profile endpoints, with at most one write per
@@ -193,7 +195,7 @@ changed group. Each successful write is fetched again and compared exactly; a
 no write.
 
 Normal JSON is status-only. It contains requested/effective fields, per-field
-statuses, recognized zone models, `zone_adapter_version`, and the numeric
+statuses and the numeric
 `selected`, `updated`, `verified`, `unchanged`, `source_missing`, and `failed`
 counters. Source/current/desired values appear only when both `--dry-run` and
 `--show-values` are supplied. `--show-values` without `--dry-run` is rejected.

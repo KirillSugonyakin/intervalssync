@@ -44,7 +44,6 @@ from ..igpsport.workout import (
     apply_uploaded_workout_map,
     upload_workouts,
 )
-from ..igpsport.zone_map import ZONE_ADAPTER_VERSION
 from . import config as cli_config_module
 from .env import ActivitySource, CliConfigError, load_credentials, resolve_env_path
 
@@ -264,8 +263,6 @@ def _rider_settings_result_payload(
         "requested_fields": list(result.requested_fields),
         "effective_fields": list(result.effective_fields),
         "field_statuses": dict(result.field_statuses),
-        "zone_models": dict(result.zone_models),
-        "zone_adapter_version": ZONE_ADAPTER_VERSION,
         "selected": result.selected,
         "updated": result.updated,
         "verified": result.verified,

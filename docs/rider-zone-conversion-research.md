@@ -8,6 +8,11 @@ All numerical examples below are synthetic. No athlete values, account or
 deployment identifiers, credentials, private payloads, or generated state are
 included. This note documents implementation reasoning, not training advice.
 
+The revised upstream contribution uses the existing conversion and HR-mode
+behavior, not the strict adapters described as historical research below.
+Same-input regression tests cover seven power slots, five HR slots, custom
+labels/boundaries, fractional thresholds, rounding, and the legacy power cap.
+
 ## What the research addressed
 
 The downstream requirement was to transfer existing Intervals.icu settings,
@@ -71,7 +76,11 @@ These outputs were computed using the existing `map_power_zones` and
 `map_hr_zones` functions and the proposed strict adapters. Arrays show upper
 boundaries, not complete API payloads.
 
-### Seven power zones into five slots
+### Seven power zones into five slots (synthetic only)
+
+No five-slot power table was observed in the live configuration. That account
+exposed seven power slots and five HR slots. This hypothetical reduction was
+an adapter test, not evidence of a defect in the live seven-slot conversion.
 
 Synthetic FTP: `250 W`; percentages: `[55,75,90,105,120,150,999]`;
 destination terminal cap: `2500 W`.
@@ -86,6 +95,10 @@ finite source boundary before the terminal cap. The proposed adapter preserves
 the first four and combines the remaining upper bands. This is a different
 coarsening policy; this example alone does not establish that the existing
 policy is wrong.
+
+With seven power slots, the existing mapper retains all six finite source
+boundaries (after legacy rounding) and replaces the open-ended sentinel with
+its terminal cap. There is no seven-to-five power reduction in that live shape.
 
 Rounding is a separate difference: `250 * 1.05 = 262.5`. The existing ties-to-even
 rounding produces `262`; positive half-up produces `263`. For a seven-slot
@@ -149,5 +162,7 @@ original stricter policy, but does not require it to become a new default.
 
 If rounding, terminal-cap preservation, model-specific coarsening, or HR-mode
 selection are proposed separately, each should have a focused compatibility
-argument, tests, and the relevant app/device evidence. The current PR's strict
-behavior remains subject to maintainer review; this document does not change it.
+argument, tests, and the relevant app/device evidence. Those strict-policy
+changes have been removed from this upstream contribution and remain separate
+downstream behavior. This historical research does not justify changing the
+original project's zone policy implicitly.

@@ -125,7 +125,7 @@ def _rider_user_destination() -> dict:
 def test_malformed_destination_zones_block_interval_group(metric):
     sport, athlete = _rider_source()
     destination = _rider_interval_destination()
-    table = "power" if metric == "power_zones" else "heartRateLactateThreshold"
+    table = "power" if metric == "power_zones" else "heartRate"
     destination[table][1] = None
     plan = build_rider_settings_plan(
         sport, athlete, destination, _rider_user_destination(), parse_rider_fields(metric)
@@ -134,7 +134,7 @@ def test_malformed_destination_zones_block_interval_group(metric):
     assert plan.field_statuses[metric] == "invalid"
 
 
-def test_rounded_power_collision_blocks_interval_group():
+def test_rounded_power_collision_uses_legacy_boundary_repair():
     sport, athlete = _rider_source()
     from dataclasses import replace
     sport = replace(sport, ftp=200, power_zones=[55, 55.1, 55.2, 55.3, 55.4, 150, 999])
@@ -142,8 +142,8 @@ def test_rounded_power_collision_blocks_interval_group():
         sport, athlete, _rider_interval_destination(), _rider_user_destination(),
         parse_rider_fields("power_zones"),
     )
-    assert plan.interval_changed_fields == ()
-    assert plan.field_statuses["power_zones"] == "invalid"
+    assert plan.field_statuses["power_zones"] == "would_update"
+    assert [row["end"] for row in plan.interval_body["power"]] == [110, 111, 112, 113, 114, 300, 2500]
 
 
 def test_interval_only_plan_does_not_parse_unselected_personal_values():
@@ -179,7 +179,7 @@ def test_parse_rider_fields_rejects_duplicates_empty_members_and_unknowns(raw):
         parse_rider_fields(raw)
 
 
-def test_build_rider_plan_writes_friel_hr_to_lthr_table_only():
+def test_build_rider_plan_uses_legacy_max_hr_table_and_mode():
     sport, athlete = _rider_source()
     current = _rider_interval_destination()
 
@@ -191,19 +191,18 @@ def test_build_rider_plan_writes_friel_hr_to_lthr_table_only():
         parse_rider_fields("hr_zones"),
     )
 
-    assert plan.zone_models == {"hr_zones": "friel_7"}
-    assert plan.interval_body["member"]["heartRateComputeMode"] == 2
+    assert plan.interval_body["member"]["heartRateComputeMode"] == 0
     assert plan.interval_body["member"]["lthr"] == 180
     assert plan.interval_body["member"]["mhr"] == 195
     assert [
-        zone["end"] for zone in plan.interval_body["heartRateLactateThreshold"]
+        zone["end"] for zone in plan.interval_body["heartRate"]
     ] == [120, 140, 160, 175, 195]
-    assert plan.interval_body["heartRate"] == current["heartRate"]
+    assert plan.interval_body["heartRateLactateThreshold"] == current["heartRateLactateThreshold"]
     assert plan.interval_body["heartRateReserve"] == current["heartRateReserve"]
     assert plan.interval_body["member"]["unrelated"] == "keep"
 
 
-def test_build_rider_plan_direct_five_preserves_current_hr_basis_and_table():
+def test_build_rider_plan_five_hr_bounds_use_legacy_max_hr_table():
     _sport, athlete = _rider_source()
     sport = SportSettings(
         ftp=None,
@@ -224,22 +223,21 @@ def test_build_rider_plan_direct_five_preserves_current_hr_basis_and_table():
         parse_rider_fields("hr_zones"),
     )
 
-    assert plan.zone_models == {"hr_zones": "direct_5"}
-    assert plan.interval_body["member"]["heartRateComputeMode"] == 1
-    assert [zone["end"] for zone in plan.interval_body["heartRateReserve"]] == [
+    assert plan.interval_body["member"]["heartRateComputeMode"] == 0
+    assert [zone["end"] for zone in plan.interval_body["heartRate"]] == [
         120,
         145,
         165,
         180,
         195,
     ]
-    assert plan.interval_body["heartRate"] == current["heartRate"]
+    assert plan.interval_body["heartRateReserve"] == current["heartRateReserve"]
     assert plan.interval_body["heartRateLactateThreshold"] == current[
         "heartRateLactateThreshold"
     ]
 
 
-def test_build_rider_plan_converts_coggan_power_and_preserves_terminal_cap():
+def test_build_rider_plan_uses_legacy_power_rounding_and_terminal_cap():
     sport, athlete = _rider_source()
     current = _rider_interval_destination()
     current["power"][-1]["end"] = 2000
@@ -252,16 +250,15 @@ def test_build_rider_plan_converts_coggan_power_and_preserves_terminal_cap():
         parse_rider_fields("power_zones"),
     )
 
-    assert plan.zone_models == {"power_zones": "coggan_7"}
     assert plan.interval_body["member"]["ftp"] == 230
     assert [zone["end"] for zone in plan.interval_body["power"]] == [
-        127,
-        173,
+        126,
+        172,
         207,
         242,
         276,
         345,
-        2000,
+        2500,
     ]
     assert [zone["color"] for zone in plan.interval_body["power"]] == [
         f"p{i}" for i in range(7)
@@ -330,7 +327,7 @@ def test_build_rider_plan_invalid_zone_shape_blocks_interval_group():
     sport = SportSettings(
         **{
             **sport.__dict__,
-            "hr_zone_names": ["Unknown"] * 7,
+            "invalid_fields": frozenset({"hr_zones"}),
         }
     )
 

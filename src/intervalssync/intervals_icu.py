@@ -325,9 +325,7 @@ def fetch_sport_settings(
     ftp, ftp_invalid = _source_num(data, "ftp")
     lthr, lthr_invalid = _source_num(data, "lthr")
     max_hr, max_hr_invalid = _source_num(data, "max_hr")
-    ftp = _round_half_up(Decimal(str(ftp))) if ftp is not None else None
-    lthr = _round_half_up(Decimal(str(lthr))) if lthr is not None else None
-    max_hr = _round_half_up(Decimal(str(max_hr))) if max_hr is not None else None
+    # Preserve fractional thresholds; each consumer applies its legacy rounding.
     power_zones, power_invalid = _source_num_list(data, "power_zones")
     hr_zones, hr_invalid = _source_num_list(data, "hr_zones")
     power_names, power_names_invalid = _source_names(data, "power_zone_names")

@@ -149,7 +149,7 @@ def test_fetch_sport_settings_tracks_malformed_non_null_fields(monkeypatch):
     )
 
 
-def test_fetch_sport_settings_normalizes_thresholds_to_positive_integers(monkeypatch):
+def test_fetch_sport_settings_preserves_fractional_thresholds_for_legacy_rounding(monkeypatch):
     monkeypatch.setattr(
         intervals_icu.requests.Session,
         "get",
@@ -160,9 +160,9 @@ def test_fetch_sport_settings_normalizes_thresholds_to_positive_integers(monkeyp
 
     settings = intervals_icu.fetch_sport_settings("api-key", "Ride", strict=True)
 
-    assert settings.ftp == 243
-    assert settings.lthr == 176
-    assert settings.max_hr == 193
+    assert settings.ftp == 242.5
+    assert settings.lthr == 175.5
+    assert settings.max_hr == 192.5
 
 
 def test_fetch_athlete_settings_normalizes_all_supported_profile_fields(monkeypatch):
