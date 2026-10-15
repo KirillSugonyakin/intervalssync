@@ -518,6 +518,28 @@ def _fake_rider_result():
     )
 
 
+@pytest.mark.parametrize("error_type", [core.SyncError, RuntimeError])
+def test_rider_sync_errors_keep_numeric_failure_counters(tmp_path, monkeypatch, capsys, error_type):
+    env_file = tmp_path / ".env"
+    _write_env(env_file)
+    def unavailable(*args, **kwargs):
+        raise error_type("synthetic-private-error")
+    monkeypatch.setattr(cli, "sync_rider_settings", unavailable)
+    args = cli._build_parser().parse_args(
+        ["sync-rider-settings", "--env-file", str(env_file), "--json"]
+    )
+    assert cli.cmd_sync_rider_settings(args) == cli.EXIT_SYNC_ERROR
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload["ok"] is False
+    assert payload["selected"] == 0
+    assert payload["failed"] == 1
+    for key in ("selected", "updated", "verified", "unchanged", "source_missing", "failed"):
+        assert type(payload[key]) is int
+    assert "synthetic-private-error" not in captured.out + captured.err
+    assert "source_values" not in payload
+
+
 def test_sync_rider_settings_parser_accepts_selective_dry_run_flags():
     args = cli._build_parser().parse_args(
         [

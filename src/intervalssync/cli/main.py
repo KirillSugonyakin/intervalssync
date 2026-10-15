@@ -620,7 +620,10 @@ def cmd_sync_rider_settings(args: argparse.Namespace) -> int:
     try:
         result = sync_rider_settings(sync_config, progress=progress)
     except IgpSyncError as exc:
-        empty = RiderSettingsSyncResult((), (), {}, {}, 0, 0, 0, 0, 0, 1)
+        empty = RiderSettingsSyncResult(
+            requested_fields=(), effective_fields=(), field_statuses={},
+            selected=0, updated=0, verified=0, unchanged=0, source_missing=0, failed=1,
+        )
         if use_json:
             _emit_json(
                 _rider_settings_result_payload(empty, ok=False, error="Could not synchronize rider settings")
@@ -629,7 +632,10 @@ def cmd_sync_rider_settings(args: argparse.Namespace) -> int:
             print("✗ Could not synchronize rider settings", file=sys.stderr)
         return EXIT_SYNC_ERROR
     except Exception as exc:  # noqa: BLE001
-        empty = RiderSettingsSyncResult((), (), {}, {}, 0, 0, 0, 0, 0, 1)
+        empty = RiderSettingsSyncResult(
+            requested_fields=(), effective_fields=(), field_statuses={},
+            selected=0, updated=0, verified=0, unchanged=0, source_missing=0, failed=1,
+        )
         if use_json:
             _emit_json(
                 _rider_settings_result_payload(
