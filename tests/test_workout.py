@@ -543,6 +543,70 @@ def test_event_description_precedes_nested_description_and_counts_truncation(
     assert result.description_truncated == 1
 
 
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("skip_moved", [False, True])
+def test_fallback_does_not_claim_another_current_workout(monkeypatch, reverse, skip_moved):
+    original = _calendar_workout()
+    calls = _patch_workout_io(monkeypatch, [original], set(), 100)
+    first = workout.upload_workouts(workout.WorkoutUploadConfig("u", "p", "k"))
+    moved = _calendar_workout(
+        start_date_local="2026-09-11",
+        name="[skip-igp] moved" if skip_moved else "moved",
+    )
+    new = _calendar_workout(event_id=43, external_id="new", name="new")
+    calendar = [new, moved] if not reverse else [moved, new]
+    calls = _patch_workout_io(monkeypatch, calendar, {100})
+    def upload(session, headers, body, **kwargs):
+        calls.append(body)
+        return int(body["data"].get("id", 200))
+    monkeypatch.setattr(workout, "upload_custom_workout", upload)
+    result = workout.upload_workouts(workout.WorkoutUploadConfig(
+        "u", "p", "k", workout_records=first.workout_records,
+    ))
+    new_call = next(call for call in calls if call["data"]["title"] == "new")
+    assert "id" not in new_call["data"]
+    assert result.workout_records[workout.source_identity_key(original)]["remote_id"] == 100
+    if skip_moved:
+        assert len(calls) == 1
+
+
+def test_unstructured_current_workout_retains_missing_remote_mapping(monkeypatch):
+    current = _calendar_workout()
+    first_calls = _patch_workout_io(monkeypatch, [current], set(), 100)
+    first = workout.upload_workouts(workout.WorkoutUploadConfig("u", "p", "k"))
+    current.workout_doc.clear()
+    calls = _patch_workout_io(monkeypatch, [current], set(), 200)
+    result = workout.upload_workouts(workout.WorkoutUploadConfig(
+        "u", "p", "k", workout_records=first.workout_records,
+    ))
+    assert calls == []
+    assert result.workout_records == first.workout_records
+
+
+def test_calendar_keeps_identity_when_document_is_missing(monkeypatch):
+    class Client:
+        def get(self, *a, **k):
+            return FakeResponse(json_data=[{
+                "id": 42, "category": "WORKOUT", "external_id": "plan-42",
+                "oauth_client_id": "provider", "start_date_local": "2026-09-10",
+            }])
+    result = intervals_icu.fetch_calendar_workouts(
+        "synthetic", date(2026, 9, 10), date(2026, 9, 10), http=Client(),
+    )
+    assert len(result) == 1
+    assert result[0].external_id == "plan-42"
+    assert result[0].workout_doc == {}
+
+
+def test_duplicate_source_identities_abort_before_any_write(monkeypatch):
+    calls = _patch_workout_io(
+        monkeypatch, [_calendar_workout(), _calendar_workout(event_id=43)], set()
+    )
+    with pytest.raises(workout.SyncError, match="ambiguous"):
+        workout.upload_workouts(workout.WorkoutUploadConfig("u", "p", "k"))
+    assert calls == []
+
+
 def test_changed_workout_updates_same_remote_id(monkeypatch):
     current = _calendar_workout(name="Changed")
     source_key = workout.source_identity_key(current)

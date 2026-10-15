@@ -218,8 +218,10 @@ def fetch_calendar_workouts(
         if event.get("category") != "WORKOUT":
             continue
         workout_doc = event.get("workout_doc")
-        if not isinstance(workout_doc, dict):
-            continue
+        if workout_doc is None:
+            workout_doc = {}
+        elif not isinstance(workout_doc, dict):
+            raise ValueError("intervals.icu workout document must be an object")
         workouts.append(
             CalendarWorkout(
                 event_id=int(event["id"]),

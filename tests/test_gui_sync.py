@@ -8,7 +8,8 @@ import flet as ft
 import pytest
 
 from intervalssync.gui import config as config_module, sync_view
-from intervalssync.igpsport import core
+from intervalssync.igpsport import core, workout
+from intervalssync import intervals_icu
 from intervalssync.intervals_icu import ActivityIdentities, ActivityUploadResult
 
 
@@ -21,7 +22,7 @@ def _walk(control):
         yield from _walk(child)
 
 
-def _click_sync(config):
+def _click_sync(config, *, workouts=False):
     page = SimpleNamespace(
         platform=ft.PagePlatform.WINDOWS,
         theme_mode=ft.ThemeMode.LIGHT,
@@ -30,7 +31,8 @@ def _click_sync(config):
     )
     store = SimpleNamespace(get=AsyncMock(return_value="offline-test-value"))
     view = sync_view.build_sync_view(page, config, store)
-    button = next(c for c in _walk(view) if isinstance(c, ft.FilledButton))
+    button_type = ft.OutlinedButton if workouts else ft.FilledButton
+    button = next(c for c in _walk(view) if isinstance(c, button_type))
     asyncio.run(button.on_click(None))
     return "\n".join(str(c.value) for c in _walk(view) if isinstance(c, ft.Text))
 
@@ -45,6 +47,35 @@ def saved_config(tmp_path, monkeypatch):
     )
     config_module.save(config)
     return config
+
+
+def test_gui_workouts_keep_identity_across_restart_and_event_replacement(saved_config, monkeypatch):
+    event = intervals_icu.CalendarWorkout(
+        event_id=42, name="Synthetic workout", description="", activity_type="Ride",
+        workout_doc={"steps": [{"duration": 60}]}, external_id="plan-42",
+        oauth_client_id="provider", start_date_local="2026-09-10",
+    )
+    monkeypatch.setattr(workout, "login", lambda *a, **k: {})
+    remote = set()
+    monkeypatch.setattr(workout, "fetch_all_custom_workout_ids", lambda *a, **k: set(remote))
+    monkeypatch.setattr(intervals_icu, "fetch_calendar_workouts", lambda *a, **k: [event])
+    calls = []
+    def upload(session, headers, body, **kwargs):
+        calls.append(body)
+        remote.add(100)
+        return 100
+    monkeypatch.setattr(workout, "upload_custom_workout", upload)
+
+    assert "uploaded 1" in _click_sync(saved_config, workouts=True)
+    reloaded = config_module.load()
+    assert reloaded.workout_records
+    assert "skipped 1" in _click_sync(reloaded, workouts=True)
+    assert len(calls) == 1
+    event.event_id = 43
+    assert "updated 1" in _click_sync(config_module.load(), workouts=True)
+    assert len(calls) == 2
+    assert calls[-1]["data"]["id"] == "100"
+    assert config_module.load().uploaded_workouts == {"43": 100}
 
 
 def test_gui_remembers_link_after_restart(saved_config, monkeypatch):

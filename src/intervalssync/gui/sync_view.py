@@ -23,7 +23,7 @@ from ..igpsport.core import (
     sync as igpsport_sync,
 )
 from ..dropbox_client import get_dropbox_app_key
-from ..igpsport.workout import WorkoutUploadConfig, apply_uploaded_workout_map, upload_workouts
+from ..igpsport.workout import WorkoutUploadConfig, apply_workout_state, upload_workouts
 from . import support_gamification
 from . import theme
 
@@ -301,14 +301,15 @@ def build_sync_view(
             intervals_api_key=api_key,
             workout_days_ahead=config.workout_days_ahead,
             uploaded_workouts=dict(config.uploaded_workouts),
+            workout_records={key: dict(value) for key, value in config.workout_records.items()},
             force_resync=config.force_resync,
         )
 
         uploaded_count = 0
         try:
             result = upload_workouts(upload_config, progress=append_log)
-            if result.synced_map or result.uploaded_map or result.pruned_keys:
-                apply_uploaded_workout_map(config.uploaded_workouts, result)
+            if result.workout_records != config.workout_records or result.uploaded_map or result.pruned_keys:
+                apply_workout_state(config.uploaded_workouts, config.workout_records, result)
                 config_module.save(config)
             uploaded_count = result.uploaded + result.recreated
             append_log(

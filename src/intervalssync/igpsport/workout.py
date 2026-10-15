@@ -583,6 +583,13 @@ def upload_workouts(
 
     # Convert legacy event-id mappings into records before making decisions.
     current_by_event = {str(item.event_id): item for item in calendar}
+    current_sources = {
+        key for item in calendar if (key := source_identity_key(item)) is not None
+    }
+    source_keys = [source_identity_key(item) for item in calendar]
+    known_sources = [key for key in source_keys if key is not None]
+    if len(current_by_event) != len(calendar) or len(known_sources) != len(current_sources):
+        raise SyncError("intervals.icu calendar has ambiguous workout identities")
     for event_key, raw_remote_id in config.uploaded_workouts.items():
         try:
             remote_id = int(raw_remote_id)
@@ -639,6 +646,8 @@ def upload_workouts(
                 key
                 for key, record in records.items()
                 if record.get("slot_key") == slot_key
+                and record["event_id"] not in current_by_event
+                and record.get("source_key") not in current_sources
             ]
             if slot_candidates and (
                 slot_counts.get(slot_key) != 1 or len(slot_candidates) != 1
@@ -752,7 +761,11 @@ def upload_workouts(
     # A complete list is authoritative. Missing mappings outside the active
     # window are forgotten, but live historical mappings remain available.
     for record_key, record in list(records.items()):
-        if record_key in matched_record_keys:
+        if (
+            record_key in matched_record_keys
+            or record["event_id"] in current_by_event
+            or record.get("source_key") in current_sources
+        ):
             continue
         if record["remote_id"] not in live_ids:
             result.pruned_keys.append(record["event_id"])
