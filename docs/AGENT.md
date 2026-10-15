@@ -186,7 +186,45 @@ Non-secret defaults in `intervalssync-cli` `config.json` (`platformdirs`). Secre
 
 Same as GUI **Upload to iGPSPORT** / **Upload to Bryton** — intervals.icu calendar → custom workouts on the chosen device platform.
 
+For iGPSPORT, CLI and GUI persist hashed logical identities and normalized
+export fingerprints in `workout_records`, while keeping the legacy event-ID
+mapping. Changed plans update the same remote workout. If a remote workout is
+manually deleted while its source remains inside the configured upload window,
+the next run recreates the latest version. Outside that window, missing remote
+workouts are not recreated. No automatic remote deletion is implemented.
 
+Matching prefers provider/external identities. Provider/type/local-date fallback
+is allowed only when unambiguous, and cannot claim a record that belongs to
+another current source event. Incomplete remote or calendar observations fail
+closed; source events without structured steps retain identity metadata and
+their mappings.
+
+Add `[skip-igp]` to the Intervals event name or description to suppress create,
+update, and recreation, including `--force-resync`. Removing the marker resumes
+sync. `[ignore-igp]` and `[delete-igp]` are ordinary text.
+
+The event description takes precedence over the nested workout description and
+is limited to 500 characters. Warmup/cooldown/rest classification follows explicit
+step metadata rather than position or power.
+
+The exporter preserves cadence as native `secondaryIntensityTarget` alongside
+primary power or HR. It honors the workout's explicit `POWER` or `HR` selection,
+uses native target units, and preserves time, distance, repetition, and open/lap
+lengths. The legacy `cadenceTarget` field is not emitted. Secondary speed and
+HR/power combinations, ramps, freeride, maximum-effort steps, calorie lengths,
+and malformed repetitions are unsupported and fail before the workout is written.
+
+Every accepted create/update is fetched with `GetWorkOutDetail` and compared
+against the expected executable structure, including primary and secondary
+targets. An HTTP success alone is not a verified upload. CLI and GUI checkpoint
+the accepted remote ID as pending before read-back, so a failed verifier does
+not lose the mapping and trigger duplicate creation. Pending records do not
+acquire a confirmed export fingerprint until verification succeeds.
+
+JSON includes `uploaded`, `updated`, `recreated`, `skipped`, `conflicted`,
+`no_steps`, `description_truncated`, `unsupported`, `verification_failed`,
+`failed`, `uploaded_map`, and `synced_map`. Unsupported or unverified exports
+increment `failed`. Conflicts or failures produce a nonzero CLI exit code.
 
 ### Zone sync
 

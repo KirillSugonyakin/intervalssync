@@ -90,6 +90,35 @@ def test_icu_workout_doc_maps_simple_ftp_step():
     }
 
 
+@pytest.mark.parametrize("block", [
+    {"reps": 2.5, "steps": [{"duration": 60}]},
+    {"reps": 0, "steps": [{"duration": 60}]},
+    {"reps": 2, "ramp": True, "steps": [{"duration": 60}]},
+    {"reps": 2, "steps": [None, {"duration": 60}]},
+    None,
+])
+def test_native_mapper_rejects_malformed_or_unsupported_repetitions(block):
+    with pytest.raises(workout.UnsupportedWorkoutError):
+        workout.icu_workout_doc_to_igps("Synthetic", "", {"steps": [block]})
+
+
+@pytest.mark.real_verification
+def test_native_verification_network_failure_returns_false(monkeypatch):
+    def unavailable(*a, **k):
+        raise workout.requests.Timeout("synthetic timeout")
+    monkeypatch.setattr(workout, "fetch_custom_workout_detail", unavailable)
+    assert not workout.verify_custom_workout(workout.requests.Session(), {}, 100, {"data": {}})
+
+
+@pytest.mark.parametrize("primary,opposite", [("POWER", "_hr"), ("HR", "_power")])
+def test_native_mapper_rejects_resolved_opposite_target(primary, opposite):
+    with pytest.raises(workout.UnsupportedWorkoutError):
+        workout.icu_workout_doc_to_igps("Synthetic", "", {
+            "target": primary,
+            "steps": [{"duration": 60, opposite: {"value": 150}}],
+        })
+
+
 def test_icu_workout_doc_maps_cadence_as_native_secondary_target():
     body = workout.icu_workout_doc_to_igps(
         "Cadence",

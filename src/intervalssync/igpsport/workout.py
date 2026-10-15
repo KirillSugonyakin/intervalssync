@@ -356,9 +356,12 @@ def verify_custom_workout(
     region: IgpRegionConfig | str | None = None,
 ) -> bool:
     """Read back and compare executable workout semantics after a write."""
-    remote = fetch_custom_workout_detail(
-        session, auth_headers, workout_id, region=region
-    )
+    try:
+        remote = fetch_custom_workout_detail(
+            session, auth_headers, workout_id, region=region
+        )
+    except requests.RequestException:
+        return False
     expected = _verification_shape(expected_body.get("data"))
     actual = _verification_shape(remote)
     return expected is not None and expected == actual
@@ -598,9 +601,15 @@ def _assert_supported_step(step: dict[str, Any], target: str) -> None:
         raise UnsupportedWorkoutError("pace targets are not supported")
     if step.get("calories") is not None or step.get("calorie") is not None:
         raise UnsupportedWorkoutError("calorie duration is not supported")
-    if target == "POWER" and isinstance(step.get("hr"), dict):
+    has_power = any(isinstance(step.get(key), dict) for key in ("power", "_power"))
+    has_hr = any(isinstance(step.get(key), dict) for key in ("hr", "_hr"))
+    if target == "POWER" and (
+        isinstance(step.get("hr"), dict) or (has_hr and not has_power)
+    ):
         raise UnsupportedWorkoutError("secondary heart-rate targets are not supported")
-    if target == "HR" and isinstance(step.get("power"), dict):
+    if target == "HR" and (
+        isinstance(step.get("power"), dict) or (has_power and not has_hr)
+    ):
         raise UnsupportedWorkoutError("secondary power targets are not supported")
     if isinstance(step.get("secondary_hr"), dict):
         raise UnsupportedWorkoutError("secondary heart-rate targets are not supported")
@@ -621,13 +630,17 @@ def _step_length(step: dict[str, Any]) -> dict[str, Any]:
 
 
 def _map_icu_step(step: dict[str, Any], index: int, target: str) -> dict[str, Any] | None:
+    _assert_supported_step(step, target)
     reps = step.get("reps")
     nested = step.get("steps")
-    if reps and isinstance(nested, list) and nested:
+    if reps is not None:
+        repetitions = _integer(reps, field="repetitions", positive=True)
+        if not isinstance(nested, list) or not nested:
+            raise UnsupportedWorkoutError("repetition has no valid child steps")
         child_steps = []
         for i, child in enumerate(nested, start=1):
             if not isinstance(child, dict):
-                continue
+                raise UnsupportedWorkoutError("repetition contains an invalid step")
             mapped = _map_icu_step(child, i, target)
             if mapped is not None:
                 child_steps.append(mapped)
@@ -639,11 +652,10 @@ def _map_icu_step(step: dict[str, Any], index: int, target: str) -> dict[str, An
             "uuid": str(uuid.uuid4()),
             "intensityClass": "Active",
             "openDuration": "false",
-            "length": {"unit": "Repetition", "value": int(reps)},
+            "length": {"unit": "Repetition", "value": repetitions},
             "steps": child_steps,
         }
 
-    _assert_supported_step(step, target)
     open_duration = bool(step.get("until_lap_press"))
     igp_step: dict[str, Any] = {
         "type": "Step",
@@ -710,7 +722,7 @@ def icu_workout_doc_to_igps(
     structure: list[dict[str, Any]] = []
     for i, step in enumerate(raw_steps, start=1):
         if not isinstance(step, dict):
-            continue
+            raise UnsupportedWorkoutError("workout contains an invalid step")
         mapped = _map_icu_step(step, i, target)
         if mapped is not None:
             structure.append(mapped)
