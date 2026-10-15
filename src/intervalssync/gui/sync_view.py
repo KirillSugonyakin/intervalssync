@@ -305,6 +305,12 @@ def build_sync_view(
             force_resync=config.force_resync,
         )
 
+        def checkpoint(result):
+            apply_workout_state(config.uploaded_workouts, config.workout_records, result)
+            config_module.save(config)
+
+        upload_config.checkpoint = checkpoint
+
         uploaded_count = 0
         try:
             result = upload_workouts(upload_config, progress=append_log)
@@ -317,6 +323,7 @@ def build_sync_view(
                 f"updated {result.updated}, recreated {result.recreated}, "
                 f"skipped {result.skipped}, no steps {result.no_steps}, "
                 f"conflicted {result.conflicted}, "
+                f"unsupported {result.unsupported}, verification failed {result.verification_failed}, "
                 f"failed {result.failed}."
             )
         except SyncError as exc:

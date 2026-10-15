@@ -245,6 +245,8 @@ def _workout_result_payload(
         "conflicted": getattr(result, "conflicted", 0),
         "no_steps": result.no_steps,
         "description_truncated": getattr(result, "description_truncated", 0),
+        "unsupported": getattr(result, "unsupported", 0),
+        "verification_failed": getattr(result, "verification_failed", 0),
     }
     if isinstance(result, WorkoutUploadResult):
         payload["uploaded_map"] = result.uploaded_map
@@ -262,6 +264,8 @@ def _emit_workout_text_summary(result: WorkoutUploadResult | BrytonWorkoutUpload
         f"skipped {result.skipped}, "
         f"conflicted {getattr(result, 'conflicted', 0)}, "
         f"no steps {result.no_steps}, "
+        f"unsupported {getattr(result, 'unsupported', 0)}, "
+        f"verification failed {getattr(result, 'verification_failed', 0)}, "
         f"failed {result.failed}."
     )
 
@@ -503,6 +507,14 @@ def cmd_upload_workouts(args: argparse.Namespace) -> int:
         workout_days_ahead=args.workout_days_ahead,
         force_resync=True if args.force_resync else None,
     )
+    if source == "igpsport":
+        def checkpoint(result: WorkoutUploadResult) -> None:
+            apply_workout_state(
+                config.uploaded_workouts, config.workout_records, result
+            )
+            cli_config_module.save(config)
+
+        upload_config.checkpoint = checkpoint
 
     try:
         result = upload_workouts(upload_config, progress=progress)

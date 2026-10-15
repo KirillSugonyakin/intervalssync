@@ -55,7 +55,8 @@
 
 - Syncs recent rides from **iGPSPORT** or **Bryton Active** to **intervals.icu** (original `.fit` files)
 - **Optional Dropbox upload** — mirror activities to a Dropbox folder from the GUI (iGPSPORT or Bryton sync)
-- **Upload workouts** — push planned cycling workouts from your intervals.icu calendar to iGPSPORT custom workouts or Bryton Active (sync to your head unit from the vendor app). The iGPSPORT CLI keeps durable identities, refreshes changed plans in place, and recreates manually deleted workouts while they remain inside the configured calendar window.
+- **Upload workouts** — push planned cycling workouts from your intervals.icu calendar to iGPSPORT custom workouts or Bryton Active (sync to your head unit from the vendor app). The iGPSPORT exporter keeps durable identities, refreshes changed plans in place, and recreates manually deleted workouts while they remain inside the configured calendar window.
+- **Secondary cadence targets (iGPSPORT)** — preserve a cadence range alongside the workout's primary power or heart-rate target, using the native secondary-target field and read-back verification. Unsupported target combinations are rejected rather than silently dropped.
 - Add **`[skip-igp]`** to an Intervals workout name or description to suppress iGPSPORT creation, updates, and recreation, including forced syncs. Removing it resumes synchronization. `[ignore-igp]` and `[delete-igp]` are ordinary text.
 - **Skips activities already uploaded** so re-running is safe — with an optional *force re-sync*
 - Lets you choose how many recent activities to process

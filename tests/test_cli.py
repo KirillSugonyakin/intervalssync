@@ -354,6 +354,8 @@ def test_upload_workouts_json_success(tmp_path: Path, monkeypatch, capsys):
     assert payload["skipped"] == 1
     assert payload["conflicted"] == 0
     assert payload["description_truncated"] == 1
+    assert payload["unsupported"] == 0
+    assert payload["verification_failed"] == 0
     assert payload["synced_map"] == {"42": 100}
     assert payload["no_steps"] == 0
 
@@ -361,6 +363,57 @@ def test_upload_workouts_json_success(tmp_path: Path, monkeypatch, capsys):
     assert loaded.uploaded_workouts == {"42": 100}
     assert loaded.workout_records["record"]["export_fingerprint"] == "fingerprint"
     assert loaded.workout_days_ahead == 1
+
+
+def test_upload_workouts_checkpoints_pending_remote_id_before_verification(
+    tmp_path: Path, monkeypatch, capsys
+):
+    env_file = tmp_path / ".env"
+    _write_env(env_file)
+    monkeypatch.setattr(cli_config, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(cli_config, "CONFIG_PATH", tmp_path / "config.json")
+
+    def fake_upload(config, progress=None):
+        assert config.checkpoint is not None
+        config.checkpoint(
+            workout.WorkoutUploadResult(
+                workout_records={
+                    "source": {
+                        "event_id": "42",
+                        "remote_id": 100,
+                        "source_key": "source",
+                        "slot_key": "slot",
+                        "export_fingerprint": None,
+                        "start_date_local": "2026-10-20",
+                        "verification_status": "pending",
+                    }
+                }
+            )
+        )
+        return workout.WorkoutUploadResult(
+            failed=1,
+            verification_failed=1,
+            workout_records={
+                "source": {
+                    "event_id": "42",
+                    "remote_id": 100,
+                    "source_key": "source",
+                    "slot_key": "slot",
+                    "export_fingerprint": None,
+                    "start_date_local": "2026-10-20",
+                    "verification_status": "pending",
+                }
+            },
+        )
+
+    monkeypatch.setattr(cli, "upload_workouts", fake_upload)
+    args = cli._build_parser().parse_args(
+        ["upload-workouts", "--env-file", str(env_file), "--json"]
+    )
+
+    assert cli.cmd_upload_workouts(args) == cli.EXIT_SYNC_ERROR
+    assert json.loads(capsys.readouterr().out)["verification_failed"] == 1
+    assert cli_config.load().workout_records["source"]["verification_status"] == "pending"
 
 
 def test_upload_workouts_json_sync_error(tmp_path: Path, monkeypatch, capsys):

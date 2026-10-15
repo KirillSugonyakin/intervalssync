@@ -49,6 +49,29 @@ def saved_config(tmp_path, monkeypatch):
     return config
 
 
+@pytest.mark.parametrize("verification_raises", [False, True])
+def test_gui_checkpoints_accepted_workout_before_verifier(saved_config, monkeypatch, verification_raises):
+    event = intervals_icu.CalendarWorkout(
+        event_id=42, name="Synthetic workout", description="", activity_type="Ride",
+        workout_doc={"steps": [{"duration": 60}]}, external_id="plan-42",
+        oauth_client_id="provider", start_date_local="2026-09-10",
+    )
+    monkeypatch.setattr(workout, "login", lambda *a, **k: {})
+    monkeypatch.setattr(workout, "fetch_all_custom_workout_ids", lambda *a, **k: set())
+    monkeypatch.setattr(intervals_icu, "fetch_calendar_workouts", lambda *a, **k: [event])
+    monkeypatch.setattr(workout, "upload_custom_workout", lambda *a, **k: 100)
+    def verify(*a, **k):
+        saved = config_module.load()
+        assert saved.uploaded_workouts == {"42": 100}
+        assert next(iter(saved.workout_records.values()))["verification_status"] == "pending"
+        if verification_raises:
+            raise RuntimeError("synthetic verifier failure")
+        return False
+    monkeypatch.setattr(workout, "verify_custom_workout", verify)
+    _click_sync(saved_config, workouts=True)
+    assert config_module.load().uploaded_workouts == {"42": 100}
+
+
 def test_gui_workouts_keep_identity_across_restart_and_event_replacement(saved_config, monkeypatch):
     event = intervals_icu.CalendarWorkout(
         event_id=42, name="Synthetic workout", description="", activity_type="Ride",
@@ -60,6 +83,9 @@ def test_gui_workouts_keep_identity_across_restart_and_event_replacement(saved_c
     monkeypatch.setattr(workout, "fetch_all_custom_workout_ids", lambda *a, **k: set(remote))
     monkeypatch.setattr(intervals_icu, "fetch_calendar_workouts", lambda *a, **k: [event])
     calls = []
+    monkeypatch.setattr(
+        workout, "fetch_custom_workout_detail", lambda *a, **k: calls[-1]["data"]
+    )
     def upload(session, headers, body, **kwargs):
         calls.append(body)
         remote.add(100)
