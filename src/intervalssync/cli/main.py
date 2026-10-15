@@ -193,9 +193,9 @@ def _build_workout_upload_config(
             workout_days_ahead if workout_days_ahead is not None else config.workout_days_ahead
         ),
         uploaded_workouts=dict(config.uploaded_workouts),
-        workout_records={
+        workout_export_state={
             str(key): dict(value)
-            for key, value in config.workout_records.items()
+            for key, value in config.workout_export_state.items()
             if isinstance(value, dict)
         },
         force_resync=force_resync if force_resync is not None else config.force_resync,
@@ -237,7 +237,6 @@ def _workout_result_payload(
         "recreated": getattr(result, "recreated", 0),
         "skipped": result.skipped,
         "failed": result.failed,
-        "conflicted": getattr(result, "conflicted", 0),
         "no_steps": result.no_steps,
         "description_truncated": getattr(result, "description_truncated", 0),
         "unsupported": getattr(result, "unsupported", 0),
@@ -257,7 +256,6 @@ def _emit_workout_text_summary(result: WorkoutUploadResult | BrytonWorkoutUpload
         f"updated {getattr(result, 'updated', 0)}, "
         f"recreated {getattr(result, 'recreated', 0)}, "
         f"skipped {result.skipped}, "
-        f"conflicted {getattr(result, 'conflicted', 0)}, "
         f"no steps {result.no_steps}, "
         f"unsupported {getattr(result, 'unsupported', 0)}, "
         f"verification failed {getattr(result, 'verification_failed', 0)}, "
@@ -461,7 +459,7 @@ def cmd_upload_workouts(args: argparse.Namespace) -> int:
     if source == "igpsport":
         def checkpoint(result: WorkoutUploadResult) -> None:
             apply_workout_state(
-                config.uploaded_workouts, config.workout_records, result
+                config.uploaded_workouts, config.workout_export_state, result
             )
             cli_config_module.save(config)
 
@@ -491,16 +489,16 @@ def cmd_upload_workouts(args: argparse.Namespace) -> int:
         return EXIT_SYNC_ERROR
 
     if (
-        result.workout_records != config.workout_records
+        result.workout_export_state != config.workout_export_state
         or result.uploaded_map
         or result.pruned_keys
     ):
         apply_workout_state(
-            config.uploaded_workouts, config.workout_records, result
+            config.uploaded_workouts, config.workout_export_state, result
         )
         cli_config_module.save(config)
 
-    ok = result.failed == 0 and result.conflicted == 0
+    ok = result.failed == 0
     if use_json:
         _emit_json(_workout_result_payload(result, ok=ok, source=source))
     else:

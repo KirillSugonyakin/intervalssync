@@ -301,12 +301,12 @@ def build_sync_view(
             intervals_api_key=api_key,
             workout_days_ahead=config.workout_days_ahead,
             uploaded_workouts=dict(config.uploaded_workouts),
-            workout_records={key: dict(value) for key, value in config.workout_records.items()},
+            workout_export_state={key: dict(value) for key, value in config.workout_export_state.items()},
             force_resync=config.force_resync,
         )
 
         def checkpoint(result):
-            apply_workout_state(config.uploaded_workouts, config.workout_records, result)
+            apply_workout_state(config.uploaded_workouts, config.workout_export_state, result)
             config_module.save(config)
 
         upload_config.checkpoint = checkpoint
@@ -314,15 +314,14 @@ def build_sync_view(
         uploaded_count = 0
         try:
             result = upload_workouts(upload_config, progress=append_log)
-            if result.workout_records != config.workout_records or result.uploaded_map or result.pruned_keys:
-                apply_workout_state(config.uploaded_workouts, config.workout_records, result)
+            if result.workout_export_state != config.workout_export_state or result.uploaded_map or result.pruned_keys:
+                apply_workout_state(config.uploaded_workouts, config.workout_export_state, result)
                 config_module.save(config)
             uploaded_count = result.uploaded + result.recreated
             append_log(
                 f"\nDone — uploaded {result.uploaded}, "
                 f"updated {result.updated}, recreated {result.recreated}, "
                 f"skipped {result.skipped}, no steps {result.no_steps}, "
-                f"conflicted {result.conflicted}, "
                 f"unsupported {result.unsupported}, verification failed {result.verification_failed}, "
                 f"failed {result.failed}."
             )

@@ -317,14 +317,10 @@ def test_upload_workouts_json_success(tmp_path: Path, monkeypatch, capsys):
             description_truncated=1,
             uploaded_map={"42": 100},
             synced_map={"42": 100},
-            workout_records={
-                "record": {
-                    "event_id": "42",
+            workout_export_state={
+                "42": {
                     "remote_id": 100,
-                    "source_key": "record",
-                    "slot_key": "slot",
                     "export_fingerprint": "fingerprint",
-                    "start_date_local": "2026-09-10",
                 }
             },
         )
@@ -352,7 +348,6 @@ def test_upload_workouts_json_success(tmp_path: Path, monkeypatch, capsys):
     assert payload["updated"] == 2
     assert payload["recreated"] == 1
     assert payload["skipped"] == 1
-    assert payload["conflicted"] == 0
     assert payload["description_truncated"] == 1
     assert payload["unsupported"] == 0
     assert payload["verification_failed"] == 0
@@ -361,7 +356,7 @@ def test_upload_workouts_json_success(tmp_path: Path, monkeypatch, capsys):
 
     loaded = cli_config.load()
     assert loaded.uploaded_workouts == {"42": 100}
-    assert loaded.workout_records["record"]["export_fingerprint"] == "fingerprint"
+    assert loaded.workout_export_state["42"]["export_fingerprint"] == "fingerprint"
     assert loaded.workout_days_ahead == 1
 
 
@@ -377,14 +372,10 @@ def test_upload_workouts_checkpoints_pending_remote_id_before_verification(
         assert config.checkpoint is not None
         config.checkpoint(
             workout.WorkoutUploadResult(
-                workout_records={
-                    "source": {
-                        "event_id": "42",
+                workout_export_state={
+                    "42": {
                         "remote_id": 100,
-                        "source_key": "source",
-                        "slot_key": "slot",
                         "export_fingerprint": None,
-                        "start_date_local": "2026-10-20",
                         "verification_status": "pending",
                     }
                 }
@@ -393,14 +384,10 @@ def test_upload_workouts_checkpoints_pending_remote_id_before_verification(
         return workout.WorkoutUploadResult(
             failed=1,
             verification_failed=1,
-            workout_records={
-                "source": {
-                    "event_id": "42",
+            workout_export_state={
+                "42": {
                     "remote_id": 100,
-                    "source_key": "source",
-                    "slot_key": "slot",
                     "export_fingerprint": None,
-                    "start_date_local": "2026-10-20",
                     "verification_status": "pending",
                 }
             },
@@ -413,7 +400,7 @@ def test_upload_workouts_checkpoints_pending_remote_id_before_verification(
 
     assert cli.cmd_upload_workouts(args) == cli.EXIT_SYNC_ERROR
     assert json.loads(capsys.readouterr().out)["verification_failed"] == 1
-    assert cli_config.load().workout_records["source"]["verification_status"] == "pending"
+    assert cli_config.load().workout_export_state["42"]["verification_status"] == "pending"
 
 
 def test_upload_workouts_json_sync_error(tmp_path: Path, monkeypatch, capsys):

@@ -60,14 +60,13 @@ class WorkoutUploadResult:
     recreated: int = 0
     skipped: int = 0
     failed: int = 0
-    conflicted: int = 0
     no_steps: int = 0
     unsupported: int = 0
     verification_failed: int = 0
     description_truncated: int = 0
     uploaded_map: dict[str, int] = field(default_factory=dict)
     synced_map: dict[str, int] = field(default_factory=dict)
-    workout_records: dict[str, dict[str, Any]] = field(default_factory=dict)
+    workout_export_state: dict[str, dict[str, Any]] = field(default_factory=dict)
     pruned_keys: list[str] = field(default_factory=list)
 
 
@@ -81,7 +80,7 @@ class WorkoutUploadConfig:
     newest: date | None = None
     workout_days_ahead: int = 1
     uploaded_workouts: dict[str, int] = field(default_factory=dict)
-    workout_records: dict[str, dict[str, Any]] = field(default_factory=dict)
+    workout_export_state: dict[str, dict[str, Any]] = field(default_factory=dict)
     force_resync: bool = False
     checkpoint: Callable[[WorkoutUploadResult], None] | None = None
 
@@ -159,7 +158,9 @@ def apply_uploaded_workout_map(
     uploaded_workouts: dict[str, int],
     result: WorkoutUploadResult,
 ) -> None:
-    """Merge upload results into config and drop entries for deleted workouts."""
+    """Merge accepted IDs, including uploads still pending verification."""
+    for event_id, state in result.workout_export_state.items():
+        uploaded_workouts[event_id] = state["remote_id"]
     uploaded_workouts.update(result.uploaded_map)
     uploaded_workouts.update(result.synced_map)
     for key in result.pruned_keys:
@@ -168,56 +169,20 @@ def apply_uploaded_workout_map(
 
 def apply_workout_state(
     uploaded_workouts: dict[str, int],
-    workout_records: dict[str, dict[str, Any]],
+    workout_export_state: dict[str, dict[str, Any]],
     result: WorkoutUploadResult,
 ) -> None:
-    """Apply authoritative records and rebuild the legacy event-id projection."""
-    next_records = {
-        str(key): dict(value) for key, value in result.workout_records.items()
+    """Persist event metadata without rebuilding or discarding legacy mappings."""
+    next_state = {
+        str(key): dict(value) for key, value in result.workout_export_state.items()
     }
-    for event_id, remote_id in result.uploaded_map.items():
-        if not any(
-            record.get("event_id") == str(event_id) for record in next_records.values()
-        ):
-            next_records[f"event:{event_id}"] = {
-                "event_id": str(event_id),
-                "remote_id": int(remote_id),
-                "source_key": None,
-                "slot_key": None,
-                "export_fingerprint": None,
-                "start_date_local": "",
-                "verification_version": None,
-                "verification_status": None,
-            }
-    workout_records.clear()
-    workout_records.update(next_records)
-    uploaded_workouts.clear()
-    for record in workout_records.values():
-        event_id = str(record.get("event_id") or "")
-        remote_id = record.get("remote_id")
-        if event_id and isinstance(remote_id, int) and remote_id > 0:
-            uploaded_workouts[event_id] = remote_id
+    apply_uploaded_workout_map(uploaded_workouts, result)
+    workout_export_state.clear()
+    workout_export_state.update(next_state)
 
 
 def _digest(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
-
-
-def source_identity_key(workout: intervals_icu.CalendarWorkout) -> str | None:
-    """Return a non-reversible stable source identity when provider data exists."""
-    if not workout.oauth_client_id or not workout.external_id:
-        return None
-    return _digest(f"{workout.oauth_client_id}\0{workout.external_id}")
-
-
-def fallback_slot_key(workout: intervals_icu.CalendarWorkout) -> str | None:
-    """Return a non-reversible provider/type/local-date fallback identity."""
-    if not workout.oauth_client_id or not workout.start_date_local:
-        return None
-    return _digest(
-        f"{workout.oauth_client_id}\0{workout.activity_type}\0"
-        f"{workout.start_date_local[:10]}"
-    )
 
 
 def export_fingerprint(body: dict[str, Any]) -> str:
@@ -245,28 +210,25 @@ def _has_skip_marker(workout: intervals_icu.CalendarWorkout) -> bool:
     return "[skip-igp]" in text
 
 
-def _valid_record(value: Any) -> dict[str, Any] | None:
-    if not isinstance(value, dict):
+def _valid_export_state(value: Any, remote_id: int | None) -> dict[str, Any] | None:
+    """Only trust export metadata belonging to the authoritative mapped ID."""
+    if not isinstance(value, dict) or remote_id is None:
         return None
-    try:
-        remote_id = int(value["remote_id"])
-    except (KeyError, TypeError, ValueError):
+    if type(value.get("remote_id")) is not int or value["remote_id"] != remote_id:
         return None
-    if remote_id <= 0:
-        return None
-    record = {
-        "event_id": str(value.get("event_id") or ""),
+    fingerprint = value.get("export_fingerprint")
+    return {
         "remote_id": remote_id,
-        "source_key": value.get("source_key") or None,
-        "slot_key": value.get("slot_key") or None,
-        "export_fingerprint": value.get("export_fingerprint") or None,
-        "start_date_local": str(value.get("start_date_local") or "")[:10],
+        "export_fingerprint": fingerprint if isinstance(fingerprint, str) else None,
+        "verification_version": (
+            1 if type(value.get("verification_version")) is int
+            and value["verification_version"] == 1 else None
+        ),
+        "verification_status": (
+            value.get("verification_status")
+            if value.get("verification_status") in ("verified", "pending") else None
+        ),
     }
-    if value.get("verification_version") == 1:
-        record["verification_version"] = 1
-    if value.get("verification_status") in {"verified", "pending"}:
-        record["verification_status"] = value["verification_status"]
-    return record
 
 
 def fetch_custom_workout_detail(
@@ -388,7 +350,13 @@ def upload_custom_workout(
         return None
     payload = data.get("data") or {}
     workout_id = payload.get("workoutId")
-    return int(workout_id) if workout_id is not None else None
+    if isinstance(workout_id, bool) or not isinstance(workout_id, (str, int)):
+        return None
+    try:
+        parsed_id = int(workout_id)
+    except ValueError:
+        return None
+    return parsed_id if parsed_id > 0 else None
 
 
 def _step_name(step: dict[str, Any], index: int) -> str:
@@ -750,283 +718,152 @@ def upload_workouts(
     config: WorkoutUploadConfig,
     progress: Progress | None = None,
 ) -> WorkoutUploadResult:
-    """Fetch upcoming intervals.icu workouts and push them to iGPSPORT."""
+    """Export workouts using exact event-ID mappings and content fingerprints."""
     report = progress or _noop
     result = WorkoutUploadResult()
-
     today = date.today()
     oldest = config.oldest or today
-    days = max(1, config.workout_days_ahead)
-    newest = config.newest or (today + timedelta(days=days - 1))
-
+    newest = config.newest or (
+        today + timedelta(days=max(1, config.workout_days_ahead) - 1)
+    )
     report("Logging in to iGPSPORT…")
     session = requests.Session()
     region = resolve_region(config.igp_region)
     auth_headers = login(session, config.igp_user, config.igp_password, region)
     report("Logged in.")
-
     try:
         live_ids = fetch_all_custom_workout_ids(session, auth_headers, region=region)
     except (requests.RequestException, ValueError) as exc:
-        raise SyncError(f"Could not list iGPSPORT workouts: {exc}") from exc
+        raise SyncError("Could not list iGPSPORT workouts") from exc
     report(f"Found {len(live_ids)} custom workouts on iGPSPORT.")
-
     report("Fetching planned workouts from intervals.icu…")
     try:
         calendar = intervals_icu.fetch_calendar_workouts(
             config.intervals_api_key, oldest, newest
         )
     except (requests.RequestException, ValueError) as exc:
-        raise SyncError(f"Could not fetch intervals.icu workouts: {exc}") from exc
-
+        raise SyncError("Could not fetch intervals.icu workouts") from exc
     if not isinstance(calendar, list):
         raise SyncError("intervals.icu workouts response must be a list")
+    current_events = {str(item.event_id) for item in calendar}
+    if len(current_events) != len(calendar):
+        raise SyncError("intervals.icu calendar has ambiguous event IDs")
     result.listed = len(calendar)
     report(f"Found {len(calendar)} planned workouts.")
 
-    records: dict[str, dict[str, Any]] = {}
-    for key, raw_record in config.workout_records.items():
-        record = _valid_record(raw_record)
-        if record is not None:
-            records[str(key)] = record
-
-    # Convert legacy event-id mappings into records before making decisions.
-    current_by_event = {str(item.event_id): item for item in calendar}
-    current_sources = {
-        key for item in calendar if (key := source_identity_key(item)) is not None
-    }
-    source_keys = [source_identity_key(item) for item in calendar]
-    known_sources = [key for key in source_keys if key is not None]
-    if len(current_by_event) != len(calendar) or len(known_sources) != len(current_sources):
-        raise SyncError("intervals.icu calendar has ambiguous workout identities")
-    for event_key, raw_remote_id in config.uploaded_workouts.items():
+    mapping: dict[str, int] = {}
+    for event_id, raw_id in config.uploaded_workouts.items():
+        if isinstance(raw_id, bool) or not isinstance(raw_id, (str, int)):
+            continue
         try:
-            remote_id = int(raw_remote_id)
-        except (TypeError, ValueError):
+            remote_id = int(raw_id)
+        except ValueError:
             continue
-        if remote_id <= 0 or any(
-            record["event_id"] == str(event_key) for record in records.values()
-        ):
-            continue
-        current = current_by_event.get(str(event_key))
-        source_key = source_identity_key(current) if current else None
-        record_key = source_key or f"event:{event_key}"
-        records[record_key] = {
-            "event_id": str(event_key),
-            "remote_id": remote_id,
-            "source_key": source_key,
-            "slot_key": fallback_slot_key(current) if current else None,
-            "export_fingerprint": None,
-            "start_date_local": current.start_date_local[:10] if current else "",
-            "verification_version": None,
-            "verification_status": None,
-        }
+        if remote_id > 0:
+            mapping[str(event_id)] = remote_id
+    states: dict[str, dict[str, Any]] = {}
+    for event_id, value in config.workout_export_state.items():
+        state = _valid_export_state(value, mapping.get(str(event_id)))
+        if state is not None:
+            states[str(event_id)] = state
+    result.workout_export_state = states
 
-    slot_counts: dict[str, int] = {}
     for item in calendar:
-        slot = fallback_slot_key(item)
-        if slot:
-            slot_counts[slot] = slot_counts.get(slot, 0) + 1
-
-    matched_record_keys: set[str] = set()
-
-    for workout in calendar:
-        event_key = str(workout.event_id)
-
-        if workout.activity_type not in _CYCLING_TYPES:
-            report(
-                f"↷ Skipping {workout.name} — unsupported type "
-                f"{workout.activity_type!r} (cycling only in v1)."
-            )
+        event_id = str(item.event_id)
+        if item.activity_type not in _CYCLING_TYPES:
+            report(f"↷ Skipping {item.name} — unsupported type (cycling only in v1).")
             result.skipped += 1
             continue
-
-        source_key = source_identity_key(workout)
-        slot_key = fallback_slot_key(workout)
-        candidates: list[str] = []
-        if source_key and source_key in records:
-            candidates = [source_key]
-        else:
-            candidates = [
-                key
-                for key, record in records.items()
-                if record["event_id"] == event_key
-            ]
-        if not candidates and slot_key:
-            slot_candidates = [
-                key
-                for key, record in records.items()
-                if record.get("slot_key") == slot_key
-                and record["event_id"] not in current_by_event
-                and record.get("source_key") not in current_sources
-            ]
-            if slot_candidates and (
-                slot_counts.get(slot_key) != 1 or len(slot_candidates) != 1
-            ):
-                report(
-                    f"✗ Conflicting fallback identity for {workout.name}; "
-                    "no write performed."
-                )
-                result.conflicted += 1
-                continue
-            if len(slot_candidates) == 1:
-                candidates = slot_candidates
-        if len(candidates) > 1:
-            report(f"✗ Conflicting identity for {workout.name}; no write performed.")
-            result.conflicted += 1
-            continue
-
-        old_key = candidates[0] if candidates else None
-        old_record = records.get(old_key) if old_key else None
-        stored_id = int(old_record["remote_id"]) if old_record else None
-        on_igpsport = stored_id is not None and stored_id in live_ids
-
-        if _has_skip_marker(workout):
-            report(f"↷ Skipping {workout.name} — [skip-igp] is present.")
+        if _has_skip_marker(item):
+            report(f"↷ Skipping {item.name} — [skip-igp] is present.")
             result.skipped += 1
-            if old_key:
-                matched_record_keys.add(old_key)
             continue
-
-        update_id = stored_id if on_igpsport else None
+        stored_id = mapping.get(event_id)
+        on_remote = stored_id is not None and stored_id in live_ids
         try:
             body = icu_workout_doc_to_igps(
-                workout.name,
-                workout.description,
-                workout.workout_doc,
-                existing_workout_id=update_id,
+                item.name, item.description, item.workout_doc,
+                existing_workout_id=stored_id if on_remote else None,
             )
         except UnsupportedWorkoutError as exc:
-            report(f"⚠ Skipping {workout.name} — unsupported workout: {exc}.")
+            report(f"⚠ Skipping {item.name} — unsupported workout: {exc}.")
             result.unsupported += 1
             result.failed += 1
-            if old_key:
-                matched_record_keys.add(old_key)
             continue
         if body is None:
-            report(
-                f"⚠ Skipping {workout.name} — no structured steps "
-                "(open the workout in intervals.icu first)."
-            )
+            report(f"⚠ Skipping {item.name} — no structured steps.")
             result.no_steps += 1
             continue
-
-        selected_description = str(
-            workout.description or workout.workout_doc.get("description") or ""
-        )
-        if len(selected_description) > 500:
+        description = str(item.description or item.workout_doc.get("description") or "")
+        if len(description) > 500:
             result.description_truncated += 1
         fingerprint = export_fingerprint(body)
-
-        event_rebound = bool(old_record and old_record["event_id"] != event_key)
-        unchanged_candidate = bool(
-            on_igpsport
-            and old_record
-            and old_record.get("export_fingerprint") == fingerprint
-            and not event_rebound
+        state = states.get(event_id)
+        unchanged = (
+            on_remote and state is not None
+            and state["export_fingerprint"] == fingerprint
             and not config.force_resync
         )
-        if unchanged_candidate and old_record.get("verification_version") == 1:
-            report(f"↷ Skipping {workout.name} — export is unchanged.")
-            result.skipped += 1
-            if old_key:
-                matched_record_keys.add(old_key)
-            continue
-        if unchanged_candidate:
-            if verify_custom_workout(
-                session, auth_headers, stored_id, body, region=region
-            ):
-                old_record["verification_version"] = 1
-                old_record["verification_status"] = "verified"
-                result.synced_map[event_key] = stored_id
+        if unchanged:
+            if state["verification_version"] == 1 and state["verification_status"] == "verified":
+                report(f"↷ Skipping {item.name} — export is unchanged.")
                 result.skipped += 1
-                if old_key:
-                    matched_record_keys.add(old_key)
                 continue
-            report(f"✗ Could not verify legacy export for {workout.name}.")
-            result.verification_failed += 1
-            result.failed += 1
-            if old_key:
-                matched_record_keys.add(old_key)
+            if verify_custom_workout(session, auth_headers, stored_id, body, region=region):
+                state["verification_version"] = 1
+                state["verification_status"] = "verified"
+                result.synced_map[event_id] = stored_id
+                result.skipped += 1
+            else:
+                result.verification_failed += 1
+                result.failed += 1
+                report(f"✗ Could not verify export for {item.name}.")
             continue
 
-        action = "update" if on_igpsport else ("recreate" if old_record else "upload")
-        action_label = {
-            "update": "Updating",
-            "recreate": "Recreating",
-            "upload": "Uploading",
-        }[action]
-        report(f"{action_label} {workout.name}…")
-        workout_id = upload_custom_workout(session, auth_headers, body, region=region)
-        if workout_id is None:
-            report(f"✗ Failed to upload {workout.name}.")
+        action = "update" if on_remote else ("recreate" if stored_id else "upload")
+        report(f"{action.capitalize()} {item.name}…")
+        accepted_id = upload_custom_workout(session, auth_headers, body, region=region)
+        if accepted_id is None or (action == "update" and accepted_id != stored_id):
+            report(f"✗ Failed to {action} {item.name} with the expected ID.")
             result.failed += 1
-            if old_key:
-                matched_record_keys.add(old_key)
             continue
-        if action == "update" and workout_id != stored_id:
-            report(f"✗ iGPSPORT changed the ID while updating {workout.name}.")
-            result.failed += 1
-            if old_key:
-                matched_record_keys.add(old_key)
-            continue
-
-        live_ids.add(workout_id)
-
-        new_key = source_key or f"event:{event_key}"
-        if old_key and old_key != new_key:
-            records.pop(old_key, None)
-        records[new_key] = {
-            "event_id": event_key,
-            "remote_id": workout_id,
-            "source_key": source_key,
-            "slot_key": slot_key,
+        mapping[event_id] = accepted_id
+        live_ids.add(accepted_id)
+        states[event_id] = {
+            "remote_id": accepted_id,
             "export_fingerprint": None,
-            "start_date_local": workout.start_date_local[:10],
             "verification_version": None,
             "verification_status": "pending",
         }
-        result.workout_records = records
+        # Save the accepted ID before any further network operation. A failed
+        # read-back must not make the next run create a duplicate.
         if config.checkpoint:
             try:
                 config.checkpoint(result)
             except Exception as exc:  # noqa: BLE001
                 raise SyncError("Could not checkpoint accepted workout ID") from exc
-        if not verify_custom_workout(
-            session, auth_headers, workout_id, body, region=region
-        ):
-            report(f"✗ Could not verify iGPSPORT export for {workout.name}.")
+        if not verify_custom_workout(session, auth_headers, accepted_id, body, region=region):
+            report(f"✗ Could not verify iGPSPORT export for {item.name}.")
             result.verification_failed += 1
             result.failed += 1
-            matched_record_keys.add(new_key)
             continue
-
-        records[new_key]["export_fingerprint"] = fingerprint
-        records[new_key]["verification_version"] = 1
-        records[new_key]["verification_status"] = "verified"
+        states[event_id].update(
+            export_fingerprint=fingerprint,
+            verification_version=1,
+            verification_status="verified",
+        )
         if action == "update":
             result.updated += 1
         elif action == "recreate":
             result.recreated += 1
         else:
             result.uploaded += 1
-            result.uploaded_map[event_key] = workout_id
-        result.synced_map[event_key] = workout_id
-        matched_record_keys.add(new_key)
+            result.uploaded_map[event_id] = accepted_id
+        result.synced_map[event_id] = accepted_id
 
-    # A complete list is authoritative. Missing mappings outside the active
-    # window are forgotten, but live historical mappings remain available.
-    for record_key, record in list(records.items()):
-        if (
-            record_key in matched_record_keys
-            or record["event_id"] in current_by_event
-            or record.get("source_key") in current_sources
-        ):
-            continue
-        if record["remote_id"] not in live_ids:
-            result.pruned_keys.append(record["event_id"])
-            records.pop(record_key)
-
-    result.workout_records = records
-
+    # Only complete cloud observations justify forgetting historical mappings.
+    for event_id, remote_id in mapping.items():
+        if event_id not in current_events and remote_id not in live_ids:
+            result.pruned_keys.append(event_id)
+            states.pop(event_id, None)
     return result

@@ -186,18 +186,20 @@ Non-secret defaults in `intervalssync-cli` `config.json` (`platformdirs`). Secre
 
 Same as GUI **Upload to iGPSPORT** / **Upload to Bryton** — intervals.icu calendar → custom workouts on the chosen device platform.
 
-For iGPSPORT, CLI and GUI persist hashed logical identities and normalized
-export fingerprints in `workout_records`, while keeping the legacy event-ID
-mapping. Changed plans update the same remote workout. If a remote workout is
+For iGPSPORT, CLI and GUI keep the existing `uploaded_workouts` event-ID mapping
+authoritative. Per-event `workout_export_state` stores export fingerprints and
+verification metadata bound to that mapped remote ID. Changed exports for the
+same event update the same remote workout; verified unchanged exports skip writes.
+Legacy mappings without metadata are updated and verified once. If a remote workout is
 manually deleted while its source remains inside the configured upload window,
 the next run recreates the latest version. Outside that window, missing remote
 workouts are not recreated. No automatic remote deletion is implemented.
 
-Matching prefers provider/external identities. Provider/type/local-date fallback
-is allowed only when unambiguous, and cannot claim a record that belongs to
-another current source event. Incomplete remote or calendar observations fail
-closed; source events without structured steps retain identity metadata and
-their mappings.
+Matching uses only the exact Intervals event ID. A replacement event with a new
+ID is a new workout; there is no provider matching, date fallback, or cross-event
+rebinding. Incomplete remote or calendar observations fail closed; source events
+without structured steps retain their mappings. iGPSPORT custom workouts are a
+list, not a synchronized execution-date calendar.
 
 Add `[skip-igp]` to the Intervals event name or description to suppress create,
 update, and recreation, including `--force-resync`. Removing the marker resumes
@@ -221,10 +223,10 @@ the accepted remote ID as pending before read-back, so a failed verifier does
 not lose the mapping and trigger duplicate creation. Pending records do not
 acquire a confirmed export fingerprint until verification succeeds.
 
-JSON includes `uploaded`, `updated`, `recreated`, `skipped`, `conflicted`,
+JSON includes `uploaded`, `updated`, `recreated`, `skipped`,
 `no_steps`, `description_truncated`, `unsupported`, `verification_failed`,
 `failed`, `uploaded_map`, and `synced_map`. Unsupported or unverified exports
-increment `failed`. Conflicts or failures produce a nonzero CLI exit code.
+increment `failed`. Failures produce a nonzero CLI exit code.
 
 ### Zone sync
 

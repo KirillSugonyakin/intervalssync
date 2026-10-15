@@ -706,7 +706,6 @@ def test_upload_workouts_keeps_accepted_id_pending_after_verification_failure(
     monkeypatch,
 ):
     current = _calendar_workout()
-    source_key = workout.source_identity_key(current)
     _patch_workout_io(monkeypatch, [current], set(), 555)
     monkeypatch.setattr(workout, "verify_custom_workout", lambda *args, **kwargs: False)
 
@@ -716,13 +715,9 @@ def test_upload_workouts_keeps_accepted_id_pending_after_verification_failure(
     assert result.verification_failed == 1
     assert result.failed == 1
     assert result.synced_map == {}
-    assert result.workout_records[source_key] == {
-        "event_id": "42",
+    assert result.workout_export_state["42"] == {
         "remote_id": 555,
-        "source_key": source_key,
-        "slot_key": workout.fallback_slot_key(current),
         "export_fingerprint": None,
-        "start_date_local": "2026-09-10",
         "verification_version": None,
         "verification_status": "pending",
     }
@@ -772,7 +767,6 @@ def test_upload_workouts_blocks_unsupported_workout_and_continues(monkeypatch):
     blocked = _calendar_workout(
         event_id=41,
         name="Unsupported ramp",
-        external_id="restortrain-41",
         steps=[
             {
                 "duration": 60,
@@ -784,24 +778,21 @@ def test_upload_workouts_blocks_unsupported_workout_and_continues(monkeypatch):
     supported = _calendar_workout(
         event_id=42,
         name="Supported",
-        external_id="restortrain-42",
         start_date_local="2026-09-11",
         steps=[{"duration": 60}],
     )
-    blocked_key = workout.source_identity_key(blocked)
     original = {
-        "event_id": "41",
         "remote_id": 100,
-        "source_key": blocked_key,
-        "slot_key": workout.fallback_slot_key(blocked),
         "export_fingerprint": "old",
-        "start_date_local": "2026-09-10",
+        "verification_version": None,
+        "verification_status": None,
     }
     calls = _patch_workout_io(monkeypatch, [blocked, supported], {100}, 200)
 
     result = workout.upload_workouts(
         workout.WorkoutUploadConfig(
-            "u", "p", "k", workout_records={blocked_key: dict(original)}
+            "u", "p", "k", uploaded_workouts={"41": 100},
+            workout_export_state={"41": dict(original)}
         )
     )
 
@@ -809,7 +800,7 @@ def test_upload_workouts_blocks_unsupported_workout_and_continues(monkeypatch):
     assert result.failed == 1
     assert result.uploaded == 1
     assert len(calls) == 1
-    assert result.workout_records[blocked_key] == original
+    assert result.workout_export_state["41"] == original
 
 
 def test_upload_workouts_one_day_window_uses_today_only(monkeypatch):
@@ -851,8 +842,6 @@ def _calendar_workout(
     event_id=42,
     name="Workout",
     description="",
-    external_id="restortrain-42",
-    oauth_client_id="restortrain",
     start_date_local="2026-09-10",
     steps=None,
 ):
@@ -862,9 +851,7 @@ def _calendar_workout(
         description=description,
         activity_type="Ride",
         workout_doc={"steps": steps or [{"duration": 60}]},
-        external_id=external_id,
-        oauth_client_id=oauth_client_id,
-        start_date_local=start_date_local,
+        start_date=start_date_local,
     )
 
 
@@ -905,33 +892,6 @@ def test_event_description_precedes_nested_description_and_counts_truncation(
     assert result.description_truncated == 1
 
 
-@pytest.mark.parametrize("reverse", [False, True])
-@pytest.mark.parametrize("skip_moved", [False, True])
-def test_fallback_does_not_claim_another_current_workout(monkeypatch, reverse, skip_moved):
-    original = _calendar_workout()
-    calls = _patch_workout_io(monkeypatch, [original], set(), 100)
-    first = workout.upload_workouts(workout.WorkoutUploadConfig("u", "p", "k"))
-    moved = _calendar_workout(
-        start_date_local="2026-09-11",
-        name="[skip-igp] moved" if skip_moved else "moved",
-    )
-    new = _calendar_workout(event_id=43, external_id="new", name="new")
-    calendar = [new, moved] if not reverse else [moved, new]
-    calls = _patch_workout_io(monkeypatch, calendar, {100})
-    def upload(session, headers, body, **kwargs):
-        calls.append(body)
-        return int(body["data"].get("id", 200))
-    monkeypatch.setattr(workout, "upload_custom_workout", upload)
-    result = workout.upload_workouts(workout.WorkoutUploadConfig(
-        "u", "p", "k", workout_records=first.workout_records,
-    ))
-    new_call = next(call for call in calls if call["data"]["title"] == "new")
-    assert "id" not in new_call["data"]
-    assert result.workout_records[workout.source_identity_key(original)]["remote_id"] == 100
-    if skip_moved:
-        assert len(calls) == 1
-
-
 def test_unstructured_current_workout_retains_missing_remote_mapping(monkeypatch):
     current = _calendar_workout()
     first_calls = _patch_workout_io(monkeypatch, [current], set(), 100)
@@ -939,10 +899,11 @@ def test_unstructured_current_workout_retains_missing_remote_mapping(monkeypatch
     current.workout_doc.clear()
     calls = _patch_workout_io(monkeypatch, [current], set(), 200)
     result = workout.upload_workouts(workout.WorkoutUploadConfig(
-        "u", "p", "k", workout_records=first.workout_records,
+        "u", "p", "k", uploaded_workouts={"42": 100},
+        workout_export_state=first.workout_export_state,
     ))
     assert calls == []
-    assert result.workout_records == first.workout_records
+    assert result.workout_export_state == first.workout_export_state
 
 
 def test_calendar_keeps_identity_when_document_is_missing(monkeypatch):
@@ -956,13 +917,14 @@ def test_calendar_keeps_identity_when_document_is_missing(monkeypatch):
         "synthetic", date(2026, 9, 10), date(2026, 9, 10), http=Client(),
     )
     assert len(result) == 1
-    assert result[0].external_id == "plan-42"
+    assert result[0].event_id == 42
+    assert result[0].start_date == "2026-09-10"
     assert result[0].workout_doc == {}
 
 
-def test_duplicate_source_identities_abort_before_any_write(monkeypatch):
+def test_duplicate_event_ids_abort_before_any_write(monkeypatch):
     calls = _patch_workout_io(
-        monkeypatch, [_calendar_workout(), _calendar_workout(event_id=43)], set()
+        monkeypatch, [_calendar_workout(), _calendar_workout()], set()
     )
     with pytest.raises(workout.SyncError, match="ambiguous"):
         workout.upload_workouts(workout.WorkoutUploadConfig("u", "p", "k"))
@@ -971,31 +933,19 @@ def test_duplicate_source_identities_abort_before_any_write(monkeypatch):
 
 def test_changed_workout_updates_same_remote_id(monkeypatch):
     current = _calendar_workout(name="Changed")
-    source_key = workout.source_identity_key(current)
     calls = _patch_workout_io(monkeypatch, [current], {100}, 100)
     cfg = workout.WorkoutUploadConfig(
-        "u",
-        "p",
-        "k",
-        uploaded_workouts={"41": 100},
-        workout_records={
-            source_key: {
-                "event_id": "41",
-                "remote_id": 100,
-                "source_key": source_key,
-                "slot_key": workout.fallback_slot_key(current),
-                "export_fingerprint": "old",
-                "start_date_local": "2026-09-09",
-            }
-        },
+        "u", "p", "k", uploaded_workouts={"42": 100},
+        workout_export_state={"42": {
+            "remote_id": 100, "export_fingerprint": "old",
+            "verification_version": 1, "verification_status": "verified",
+        }},
     )
     result = workout.upload_workouts(cfg)
     assert result.updated == 1
     assert result.uploaded == 0
     assert calls[0]["data"]["id"] == "100"
     assert result.synced_map == {"42": 100}
-    assert result.workout_records[source_key]["event_id"] == "42"
-
 
 def test_unchanged_workout_is_skipped_without_write(monkeypatch):
     current = _calendar_workout()
@@ -1003,20 +953,16 @@ def test_unchanged_workout_is_skipped_without_write(monkeypatch):
         current.name, current.description, current.workout_doc, existing_workout_id=100
     )
     fingerprint = workout.export_fingerprint(body)
-    source_key = workout.source_identity_key(current)
     calls = _patch_workout_io(monkeypatch, [current], {100}, 100)
     cfg = workout.WorkoutUploadConfig(
         "u",
         "p",
         "k",
-        workout_records={
-            source_key: {
-                "event_id": "42",
+        uploaded_workouts={"42": 100},
+        workout_export_state={
+            "42": {
                 "remote_id": 100,
-                "source_key": source_key,
-                "slot_key": workout.fallback_slot_key(current),
                 "export_fingerprint": fingerprint,
-                "start_date_local": "2026-09-10",
             }
         },
     )
@@ -1028,20 +974,16 @@ def test_unchanged_workout_is_skipped_without_write(monkeypatch):
 
 def test_missing_mapped_workout_is_recreated_in_active_window(monkeypatch):
     current = _calendar_workout()
-    source_key = workout.source_identity_key(current)
     calls = _patch_workout_io(monkeypatch, [current], set(), 200)
     cfg = workout.WorkoutUploadConfig(
         "u",
         "p",
         "k",
-        workout_records={
-            source_key: {
-                "event_id": "42",
+        uploaded_workouts={"42": 100},
+        workout_export_state={
+            "42": {
                 "remote_id": 100,
-                "source_key": source_key,
-                "slot_key": workout.fallback_slot_key(current),
                 "export_fingerprint": "old",
-                "start_date_local": "2026-09-10",
             }
         },
     )
@@ -1049,7 +991,7 @@ def test_missing_mapped_workout_is_recreated_in_active_window(monkeypatch):
     assert result.recreated == 1
     assert result.uploaded == 0
     assert "id" not in calls[0]["data"]
-    assert result.workout_records[source_key]["remote_id"] == 200
+    assert result.workout_export_state["42"]["remote_id"] == 200
 
 
 def test_skip_marker_suppresses_create_update_and_force(monkeypatch):
@@ -1073,23 +1015,21 @@ def test_ignore_marker_is_ordinary_text(monkeypatch):
 
 def test_update_id_mismatch_fails_and_preserves_record(monkeypatch):
     current = _calendar_workout()
-    source_key = workout.source_identity_key(current)
     original = {
-        "event_id": "42",
         "remote_id": 100,
-        "source_key": source_key,
-        "slot_key": workout.fallback_slot_key(current),
         "export_fingerprint": "old",
-        "start_date_local": "2026-09-10",
+        "verification_version": None,
+        "verification_status": None,
     }
     _patch_workout_io(monkeypatch, [current], {100}, 999)
     cfg = workout.WorkoutUploadConfig(
-        "u", "p", "k", workout_records={source_key: dict(original)}
+        "u", "p", "k", uploaded_workouts={"42": 100},
+        workout_export_state={"42": dict(original)}
     )
     result = workout.upload_workouts(cfg)
     assert result.failed == 1
     assert result.updated == 0
-    assert result.workout_records[source_key] == original
+    assert result.workout_export_state["42"] == original
 
 
 def test_incomplete_remote_listing_fails_closed(monkeypatch):
@@ -1100,36 +1040,3 @@ def test_incomplete_remote_listing_fails_closed(monkeypatch):
     )
     with pytest.raises(workout.SyncError):
         workout.fetch_all_custom_workout_ids(workout.requests.Session(), {})
-
-
-def test_ambiguous_fallback_identity_conflicts_without_write(monkeypatch):
-    current = _calendar_workout(external_id=None)
-    slot = workout.fallback_slot_key(current)
-    calls = _patch_workout_io(monkeypatch, [current], {100, 101}, 100)
-    cfg = workout.WorkoutUploadConfig(
-        "u",
-        "p",
-        "k",
-        workout_records={
-            "old-a": {
-                "event_id": "1",
-                "remote_id": 100,
-                "source_key": None,
-                "slot_key": slot,
-                "export_fingerprint": "a",
-                "start_date_local": "2026-09-10",
-            },
-            "old-b": {
-                "event_id": "2",
-                "remote_id": 101,
-                "source_key": None,
-                "slot_key": slot,
-                "export_fingerprint": "b",
-                "start_date_local": "2026-09-10",
-            },
-        },
-    )
-    result = workout.upload_workouts(cfg)
-    assert result.conflicted == 1
-    assert result.failed == 0
-    assert calls == []

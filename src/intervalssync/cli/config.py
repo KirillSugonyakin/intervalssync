@@ -37,9 +37,9 @@ class CliConfig:
     uploaded_activities: dict[str, str] = field(default_factory=dict)
     # Planned workouts: intervals.icu event id → iGPSPORT workoutId.
     uploaded_workouts: dict[str, int] = field(default_factory=dict)
-    # Authoritative planned-workout identity and export state. Keys and source
-    # identities are SHA-256 digests; no workout content is stored here.
-    workout_records: dict[str, dict] = field(default_factory=dict)
+    # Per-event export fingerprints and verification state, bound to mapped IDs.
+    # No workout content or provider identities are stored here.
+    workout_export_state: dict[str, dict] = field(default_factory=dict)
     # Planned workouts: intervals.icu event id → Bryton FIT filename stem.
     uploaded_bryton_workouts: dict[str, str] = field(default_factory=dict)
     # How many calendar days of planned workouts to upload (1 = today only).
